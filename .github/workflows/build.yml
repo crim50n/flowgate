@@ -19,12 +19,14 @@ jobs:
       - name: Build Debian package
         run: |
           dpkg-buildpackage -us -uc -b
+          mkdir -p artifacts
+          mv ../*.deb artifacts/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: deb-packages
-          path: ../*.deb
+          path: artifacts/*.deb
 
   build-docker:
     name: Build Docker Images
