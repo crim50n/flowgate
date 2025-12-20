@@ -2,14 +2,26 @@ name: Build and Publish
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-deb:
     name: Build Debian Packages
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get version from changelog
+        id: get_version
+        run: |
+          VERSION=$(dpkg-parsechangelog --show-field Version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
 
       - name: Install build dependencies
         run: |
@@ -27,6 +39,29 @@ jobs:
         with:
           name: deb-packages
           path: artifacts/*.deb
+
+  publish-release:
+    name: Publish Release
+    needs: build-deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: deb-packages
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.build-deb.outputs.version }}
+          files: artifacts/*.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-docker:
     name: Build Docker Images
