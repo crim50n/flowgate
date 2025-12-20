@@ -1,0 +1,26 @@
+[Unit]
+Description=FlowWeb Dashboard for Flowgate
+Documentation=https://github.com/crims0n/flowgate
+After=network.target flowgate.service
+Requires=flowgate.service
+
+[Service]
+Type=simple
+User=flowgate
+Group=flowgate
+WorkingDirectory=/usr/share/flowgate
+Environment="HTTPS_ONLY=false"
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 5000 --log-level warning
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/flowgate /etc/flowgate
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

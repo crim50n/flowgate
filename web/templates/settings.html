@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-8">
+    <!-- Admin Credentials -->
+    <div class="glass p-8 rounded-xl">
+        <div class="flex justify-between items-center mb-6">
+            <h3 class="text-xl font-bold">Admin Credentials</h3>
+            <a href="/" class="text-sm text-blue-400 hover:text-blue-300">← Back to Dashboard</a>
+        </div>
+        <form action="/settings/update" method="POST" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div>
+                <label class="block text-sm font-medium mb-1 text-gray-400">Username</label>
+                <input type="text" name="username" value="{{ user }}" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-1 focus:ring-blue-500 outline-none" required>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1 text-gray-400">New Password (leave blank to keep)</label>
+                <input type="password" name="password" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-1 focus:ring-blue-500 outline-none">
+            </div>
+            <button class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded-lg font-bold transition">Save Changes</button>
+        </form>
+    </div>
+
+    <!-- 2FA Settings -->
+    <div class="glass p-8 rounded-xl">
+        <h3 class="text-xl font-bold mb-6 flex items-center justify-between">
+            Two-Factor Authentication
+            {% if has_2fa %}
+            <span class="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">Enabled</span>
+            {% else %}
+            <span class="text-xs bg-gray-700 text-gray-400 px-2 py-1 rounded">Disabled</span>
+            {% endif %}
+        </h3>
+
+        {% if not has_2fa %}
+        <div id="setup-2fa-area">
+            <p class="text-gray-400 mb-4">Secure your account with Google Authenticator or compatible app.</p>
+            <button onclick="start2FASetup()" class="bg-purple-600 hover:bg-purple-500 px-6 py-2 rounded-lg font-bold transition">Setup 2FA</button>
+            
+            <div id="qr-container" class="hidden mt-6 p-4 bg-white rounded-lg w-fit mx-auto"></div>
+            <p id="secret-text" class="hidden text-center mt-4 font-mono text-yellow-400 tracking-widest break-all text-sm md:text-base px-4"></p>
+            
+            <div id="verify-area" class="hidden mt-6 space-y-4">
+                <p class="text-center text-sm text-gray-400">Enter the 6-digit code from your app to verify:</p>
+                <div class="flex flex-col sm:flex-row gap-2 justify-center items-center">
+                    <input type="text" id="verify-code" class="bg-gray-800 border border-gray-700 rounded-lg p-2 w-32 text-center tracking-widest text-xl outline-none focus:ring-2 focus:ring-blue-500" placeholder="000000" maxlength="6">
+                    <button onclick="verify2FA()" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded-lg font-bold transition">Verify</button>
+                </div>
+                <p id="verify-error" class="text-red-400 text-center text-sm hidden"></p>
+            </div>
+        </div>
+        {% else %}
+        <form action="/settings/2fa/disable" method="POST" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <p class="text-gray-400 mb-4">2FA is currently protecting your account.</p>
+            <div>
+                <label class="block text-sm font-medium mb-1 text-gray-400">Enter password to confirm</label>
+                <input type="password" name="password" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-1 focus:ring-red-500 outline-none" required>
+            </div>
+            <button class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded-lg font-bold transition">Disable 2FA</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+async function start2FASetup() {
+    const res = await fetch('/settings/2fa/setup', { method: 'POST' });
+    const data = await res.json();
+    
+    const qrContainer = document.getElementById('qr-container');
+    const secretText = document.getElementById('secret-text');
+    const verifyArea = document.getElementById('verify-area');
+    
+    qrContainer.innerHTML = '';
+    new QRCode(qrContainer, data.uri);
+    
+    secretText.innerText = data.secret;
+    
+    qrContainer.classList.remove('hidden');
+    secretText.classList.remove('hidden');
+    verifyArea.classList.remove('hidden');
+}
+
+async function verify2FA() {
+    const code = document.getElementById('verify-code').value;
+    const errorMsg = document.getElementById('verify-error');
+    
+    const formData = new FormData();
+    formData.append('code', code);
+    
+    const res = await fetch('/settings/2fa/verify', {
+        method: 'POST',
+        body: formData
+    });
+    
+    const data = await res.json();
+    
+    if (data.success) {
+        window.location.reload();
+    } else {
+        errorMsg.innerText = data.error || 'Verification failed';
+        errorMsg.classList.remove('hidden');
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,7 @@
+[Unit]
+Description=Flowgate Configuration Sync
+Documentation=https://github.com/crim50n/flowgate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flowgate sync

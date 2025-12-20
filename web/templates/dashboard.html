@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <!-- Stats / Actions -->
+    <div class="lg:col-span-1 space-y-6">
+        <div class="glass p-6 rounded-xl">
+            <h3 class="text-lg font-bold mb-4 flex items-center">
+                <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span> System Status
+            </h3>
+            <div class="space-y-2 text-sm text-gray-300">
+                <div class="flex justify-between"><span>Proxy (Angie)</span> <span class="text-green-400">Active</span></div>
+                <div class="flex justify-between"><span>DNS (Blocky)</span> <span class="text-green-400">Active</span></div>
+                <div class="flex justify-between"><span>Total Domains</span> <span>{{ proxies|length + services|length }}</span></div>
+            </div>
+            <form action="/action/sync" method="POST" class="mt-6">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="w-full bg-gray-700 hover:bg-gray-600 py-2 rounded-lg transition text-sm">Force Sync</button>
+            </form>
+        </div>
+
+        <div class="glass p-6 rounded-xl">
+            <h3 class="text-lg font-bold mb-4">Add New Domain</h3>
+            <form action="/action/add" method="POST" class="space-y-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div>
+                    <input type="text" name="domain" placeholder="example.com" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none" required pattern="^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$" title="Enter a valid domain name">
+                </div>
+                <div class="flex space-x-2">
+                    <select name="type" id="typeSelect" class="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm flex-grow outline-none" onchange="toggleFields()">
+                        <option value="proxy">Proxy</option>
+                        <option value="service">Local Service</option>
+                    </select>
+                </div>
+                <div id="serviceFields" class="hidden space-y-3">
+                    <input type="number" name="port" placeholder="Port (e.g. 8080)" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm outline-none" min="1" max="65535">
+                    <input type="text" name="ip" placeholder="IP (default 127.0.0.1)" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm outline-none" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                </div>
+                <button class="w-full bg-blue-600 hover:bg-blue-500 py-2 rounded-lg transition text-sm font-bold">Add Domain</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Domain List -->
+    <div class="lg:col-span-2 space-y-6">
+        <!-- Services -->
+        <div class="glass p-6 rounded-xl">
+            <h3 class="text-xl font-bold mb-4 text-blue-400">Local Services</h3>
+            {% if services %}
+            <div class="grid gap-3">
+                {% for domain, data in services.items() %}
+                <div class="bg-gray-800/50 p-3 rounded-lg flex justify-between items-center group hover:bg-gray-800 transition">
+                    <div>
+                        <div class="font-medium">{{ domain }}</div>
+                        <div class="text-xs text-gray-500">&#8594; {{ data.ip }}:{{ data.port }}</div>
+                    </div>
+                    {# Use data-attributes instead of inline JS to prevent XSS #}
+                    <form action="/action/remove" method="POST" class="delete-form" data-domain="{{ domain|e }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="domain" value="{{ domain }}">
+                        <button type="submit" class="text-gray-600 hover:text-red-400 p-2 opacity-0 group-hover:opacity-100 transition">&#10005;</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm italic">No local services configured.</p>
+            {% endif %}
+        </div>
+
+        <!-- Proxies -->
+        <div class="glass p-6 rounded-xl">
+            <h3 class="text-xl font-bold mb-4 text-purple-400">Proxies</h3>
+            {% if proxies %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {% for domain, data in proxies.items() %}
+                <div class="bg-gray-800/50 p-3 rounded-lg flex justify-between items-center group hover:bg-gray-800 transition">
+                    <span class="text-sm">{{ domain }}</span>
+                    {# Use data-attributes instead of inline JS to prevent XSS #}
+                    <form action="/action/remove" method="POST" class="delete-form" data-domain="{{ domain|e }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="domain" value="{{ domain }}">
+                        <button type="submit" class="text-gray-600 hover:text-red-400 p-1 opacity-0 group-hover:opacity-100 transition">&#10005;</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm italic">No proxies configured.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleFields() {
+    const type = document.getElementById('typeSelect').value;
+    const fields = document.getElementById('serviceFields');
+    if (type === 'service') {
+        fields.classList.remove('hidden');
+    } else {
+        fields.classList.add('hidden');
+    }
+}
+
+// Safe confirm dialog using data-attributes
+document.querySelectorAll('.delete-form').forEach(function(form) {
+    form.addEventListener('submit', function(e) {
+        const domain = this.dataset.domain;
+        if (!confirm('Delete ' + domain + '?')) {
+            e.preventDefault();
+        }
+    });
+});
+</script>
+{% endblock %}

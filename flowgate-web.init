@@ -1,0 +1,80 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          flowgate-web
+# Required-Start:    $network $remote_fs flowgate
+# Required-Stop:     $network $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: FlowWeb Dashboard
+# Description:       Web UI for Flowgate management
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+NAME=flowgate-web
+DESC="FlowWeb Dashboard"
+WORKDIR=/usr/share/flowgate
+PIDFILE=/var/run/$NAME.pid
+LOGFILE=/var/log/flowgate/flowgate-web.log
+USER=flowgate
+GROUP=flowgate
+
+. /lib/lsb/init-functions
+
+mkdir -p /var/log/flowgate
+chown -R $USER:$GROUP /var/log/flowgate 2>/dev/null || true
+
+do_start() {
+    log_daemon_msg "Starting $DESC" "$NAME"
+    start-stop-daemon --start --quiet --background \
+        --make-pidfile --pidfile "$PIDFILE" \
+        --chuid "$USER:$GROUP" \
+        --chdir "$WORKDIR" \
+        --startas /bin/sh -- -c "exec /usr/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 5000 >> $LOGFILE 2>&1"
+    log_end_msg $?
+}
+
+do_stop() {
+    log_daemon_msg "Stopping $DESC" "$NAME"
+    start-stop-daemon --stop --quiet --pidfile "$PIDFILE" --retry=TERM/30/KILL/5
+    RETVAL=$?
+    rm -f "$PIDFILE"
+    log_end_msg $RETVAL
+}
+
+do_status() {
+    if [ -f "$PIDFILE" ] && kill -0 $(cat "$PIDFILE") 2>/dev/null; then
+        log_success_msg "$NAME is running (PID $(cat $PIDFILE))"
+        return 0
+    else
+        log_failure_msg "$NAME is not running"
+        return 3
+    fi
+}
+
+case "$1" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart)
+        do_stop
+        sleep 1
+        do_start
+        ;;
+    reload|force-reload)
+        do_stop
+        sleep 1
+        do_start
+        ;;
+    status)
+        do_status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload|force-reload|status}" >&2
+        exit 3
+        ;;
+esac
+
+exit 0

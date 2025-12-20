@@ -1,0 +1,19 @@
+bind_host: 0.0.0.0
+bind_port: 3000
+dns:
+  bind_hosts:
+  - 0.0.0.0
+  port: 53
+  protection_enabled: true
+  filtering_enabled: true
+  upstream_dns:
+  - https://dns.google/dns-query
+  - https://dns.cloudflare.com/dns-query
+tls:
+  enabled: false
+filters:
+- enabled: true
+  url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+  name: AdGuard DNS filter
+  id: 1
+user_rules: []

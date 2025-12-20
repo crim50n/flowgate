@@ -1,0 +1,12 @@
+[Unit]
+Description=Flowgate Network Flow Controller - Initial Sync
+Documentation=https://github.com/crim50n/flowgate
+After=network.target
+Before=flowgate-sync.path
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flowgate sync
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+flowgate (1.0.1-1) unstable; urgency=medium
+
+  * Refactor web interface to use local CSS assets.
+
+ -- crims0n <crims0n@minios.dev>  Sat, 20 Dec 2025 00:50:26 +0300
+
+flowgate (1.0.0-1) unstable; urgency=medium
+
+  * Initial release.
+
+ -- crims0n <crims0n@minios.dev>  Fri, 19 Dec 2025 21:40:03 +0300

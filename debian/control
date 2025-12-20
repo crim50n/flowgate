@@ -1,0 +1,25 @@
+Source: flowgate
+Section: net
+Priority: optional
+Maintainer: crims0n <crims0n@minios.dev>
+Build-Depends: debhelper (>= 12)
+Standards-Version: 4.5.0
+Homepage: https://github.com/crims0n/flowgate
+
+Package: flowgate
+Architecture: all
+Pre-Depends: init-system-helpers (>= 1.54~)
+Depends: ${misc:Depends}, python3, python3-yaml, curl, blocky | adguardhome, angie | nginx, angie | certbot, angie | python3-certbot-nginx
+Description: Network Flow Controller (DNS & Proxy Manager)
+ Modern CLI tool for managing network flow infrastructure (DNS & Proxy).
+ Supports Nginx/Angie (Layer 4 & 7) and Blocky/AdGuardHome (DNS).
+ Automatically manages SSL certificates via Certbot (for Nginx) or
+ native ACME (Angie).
+
+Package: flowgate-web
+Architecture: all
+Pre-Depends: init-system-helpers (>= 1.54~)
+Depends: ${misc:Depends}, flowgate, python3, python3-fastapi, python3-uvicorn, python3-jinja2, python3-multipart, python3-passlib, python3-bcrypt, python3-pyotp, python3-itsdangerous
+Description: Web UI for Flowgate
+ Simple web dashboard to manage domains and services for Flowgate.
+ Provides a graphical interface for the flowgate CLI tool.

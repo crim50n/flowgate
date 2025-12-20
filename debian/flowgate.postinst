@@ -1,0 +1,54 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create system user for flowgate
+        if ! getent group flowgate >/dev/null; then
+            groupadd -r flowgate
+        fi
+        if ! id -u flowgate >/dev/null 2>&1; then
+            useradd -r -g flowgate -s /usr/sbin/nologin -d /var/lib/flowgate flowgate
+        fi
+
+        # Create directories with correct permissions
+        install -d -m 755 -o root -g root /etc/flowgate
+        install -d -m 750 -o flowgate -g flowgate /var/lib/flowgate
+        install -d -m 750 -o flowgate -g flowgate /var/lib/flowgate/backups
+        install -d -m 755 -o root -g root /etc/blocky
+
+        # Create default config if not exists
+        if [ ! -f /etc/flowgate/flowgate.yaml ]; then
+            cp /etc/flowgate/flowgate.yaml.default /etc/flowgate/flowgate.yaml
+            chown root:flowgate /etc/flowgate/flowgate.yaml
+            chmod 640 /etc/flowgate/flowgate.yaml
+            echo "Created default configuration at /etc/flowgate/flowgate.yaml"
+        fi
+
+        # Create nginx/angie directories if server is installed
+        if [ -d /etc/nginx ]; then
+            mkdir -p /etc/nginx/streams-enabled /etc/nginx/sites-enabled
+        fi
+        if [ -d /etc/angie ]; then
+            mkdir -p /etc/angie/stream.d /etc/angie/http.d
+        fi
+
+        echo ""
+        echo "Flowgate installed successfully!"
+        echo "Enable automatic config sync: systemctl enable --now flowgate-sync.path"
+        echo "Run 'flowgate status' to see current configuration"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

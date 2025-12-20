@@ -1,0 +1,7 @@
+flowgate ALL=(ALL) NOPASSWD: /usr/bin/flowgate
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl restart flowgate
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl restart flowweb
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl restart blocky
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl restart AdGuardHome
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
+flowgate ALL=(ALL) NOPASSWD: /bin/systemctl reload angie

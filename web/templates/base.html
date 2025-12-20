@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowgate</title>
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="/static/qrcode.min.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass border-b border-gray-700 p-4 sticky top-0 z-50">
+        <div class="container mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+            <div class="flex items-center space-x-2">
+                <a href="/" class="flex items-center space-x-2 hover:opacity-80 transition">
+                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/30">F</div>
+                    <span class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-purple-600">Flowgate</span>
+                </a>
+            </div>
+            <div class="flex items-center space-x-6">
+                {% if user %}
+                <a href="/" class="hover:text-blue-500 transition font-medium">Dashboard</a>
+                <a href="/settings" class="hover:text-blue-500 transition font-medium">Settings</a>
+                <a href="/logout" class="text-red-500 hover:text-red-600 transition font-medium">Logout</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto p-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="p-4 text-center text-gray-500 text-sm">
+        Flowgate &copy; 2025
+    </footer>
+</body>
+</html>

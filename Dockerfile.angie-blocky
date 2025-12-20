@@ -1,0 +1,90 @@
+# Stage 1: Final Image
+FROM alpine:3.20
+
+# Install dependencies and Angie
+RUN echo "https://download.angie.software/angie/alpine/v3.20/main" >> /etc/apk/repositories && \
+    apk add --no-cache --allow-untrusted angie angie-module-image-filter angie-module-xslt \
+    python3 \
+    py3-pip \
+    py3-yaml \
+    curl \
+    bash \
+    ca-certificates \
+    openssl \
+    tzdata \
+    gcc \
+    python3-dev \
+    libffi-dev \
+    libcap \
+    sudo \
+    musl-dev
+
+# Create users
+RUN addgroup -S flowgate && adduser -S -D -H -h /var/lib/flowgate -s /sbin/nologin -G flowgate flowgate && \
+    addgroup -S blocky && adduser -S -D -H -h /var/lib/blocky -s /sbin/nologin -G blocky blocky
+
+# Python packages for FlowWeb
+RUN pip3 install --no-cache-dir --break-system-packages \
+    fastapi \
+    uvicorn \
+    jinja2 \
+    python-multipart \
+    "passlib[bcrypt]" \
+    "bcrypt==4.0.1" \
+    pyotp \
+    itsdangerous \
+    pyyaml
+
+# Install Blocky
+ARG BLOCKY_VERSION=v0.28.2
+RUN curl -L -o /tmp/blocky.tar.gz https://github.com/0xERR0R/blocky/releases/download/${BLOCKY_VERSION}/blocky_${BLOCKY_VERSION}_Linux_x86_64.tar.gz && \
+    tar xzf /tmp/blocky.tar.gz -C /usr/bin blocky && \
+    chmod +x /usr/bin/blocky && \
+    rm /tmp/blocky.tar.gz
+
+# Set capabilities for Blocky
+RUN setcap 'cap_net_bind_service=+ep' /usr/bin/blocky
+
+# Setup Directories
+RUN mkdir -p /etc/blocky /etc/flowgate /var/lib/flowgate/backups /etc/angie/stream.d /etc/angie/http.d /var/lib/blocky
+
+# Configure Angie
+# Remove default conf
+RUN rm -f /etc/angie/http.d/default.conf
+# Add main angie.conf
+COPY angie.conf /etc/angie/angie.conf
+
+# Copy flowgate script
+COPY flowgate /usr/bin/flowgate
+RUN chmod +x /usr/bin/flowgate
+
+# Copy default config
+COPY flowgate.yaml.default /etc/flowgate/flowgate.yaml.default
+
+# Configure sudoers
+COPY flowgate.sudoers /etc/sudoers.d/flowgate
+RUN chmod 440 /etc/sudoers.d/flowgate
+
+# Copy Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy FlowWeb
+COPY web /usr/share/flowgate
+
+# Set ownership
+RUN chown -R flowgate:flowgate /etc/flowgate /var/lib/flowgate /usr/share/flowgate && \
+    chown -R blocky:blocky /etc/blocky /var/lib/blocky
+
+# Expose Ports
+# 80/443 - HTTP/HTTPS (Angie)
+# 853 - DNS over TLS (Blocky)
+EXPOSE 80/tcp 443/tcp 853/tcp
+
+# Environment Variables
+ENV PROXY_IP="auto"
+ENV DNS_DOMAIN=""
+ENV DNS_UPSTREAM="https://8.8.8.8/dns-query,https://1.1.1.1/dns-query"
+ENV ENABLE_WEB_UI="false"
+
+ENTRYPOINT ["/entrypoint.sh"]

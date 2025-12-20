@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="flex items-center justify-center h-[80vh]">
+    <div class="glass p-8 rounded-2xl shadow-2xl w-full max-w-md">
+        <h2 class="text-2xl font-bold mb-6 text-center">Login</h2>
+
+        {% if error %}
+        <div class="bg-red-500/20 border border-red-500 text-red-200 p-3 rounded-lg mb-4 text-sm text-center">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form action="/login" method="POST" class="space-y-4">
+            {% if require_2fa %}
+                {# No password in form - using server session #}
+                <input type="hidden" name="username" value="">
+                <input type="hidden" name="password" value="">
+                <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-400">2FA Code</label>
+                    <input type="text" name="totp" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none transition text-center tracking-widest text-xl" placeholder="000000" autofocus required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+                </div>
+            {% else %}
+                <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-400">Username</label>
+                    <input type="text" name="username" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none transition" required autocomplete="username">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-400">Password</label>
+                    <input type="password" name="password" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none transition" required autocomplete="current-password">
+                </div>
+            {% endif %}
+
+            <button type="submit" class="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-3 rounded-lg transition transform hover:scale-[1.02]">
+                {% if require_2fa %}Verify{% else %}Sign In{% endif %}
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

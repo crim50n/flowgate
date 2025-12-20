@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	$(MAKE) install install-web DESTDIR=$$(pwd)/debian/tmp PREFIX=/usr SYSTEMD_UNITDIR=/usr/lib/systemd/system INIT_SYSTEM=systemd
+
+override_dh_usrlocal:
+	# Do not install to /usr/local

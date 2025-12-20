@@ -1,0 +1,939 @@
+#!/usr/bin/env python3
+"""
+Flowgate
+========
+Modern CLI tool for managing network flow infrastructure (DNS & Proxy).
+Supports: Nginx, Blocky, AdGuardHome.
+"""
+
+import sys
+import os
+import re
+import yaml
+import json
+import shutil
+import subprocess
+import argparse
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple, Union
+from dataclasses import dataclass
+
+# --- Input Validation ---
+
+DOMAIN_REGEX = re.compile(r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
+IP_REGEX = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+
+def validate_domain(domain: str) -> bool:
+    """Validate domain name format to prevent config injection."""
+    if not domain or len(domain) > 253:
+        return False
+    return bool(DOMAIN_REGEX.match(domain))
+
+def validate_ip(ip: str) -> bool:
+    """Validate IPv4 address format."""
+    if not ip:
+        return True  # Optional field
+    return bool(IP_REGEX.match(ip))
+
+def validate_port(port: int) -> bool:
+    """Validate port number."""
+    return 1 <= port <= 65535
+
+# --- Configuration & Constants ---
+
+CONFIG_DIR = Path("/etc/flowgate")
+DATA_DIR = Path("/var/lib/flowgate")
+BACKUP_DIR = DATA_DIR / "backups"
+CONFIG_FILE = CONFIG_DIR / "flowgate.yaml"
+
+def get_adguard_config_path() -> Path:
+    """Determine AdGuardHome configuration path."""
+    # Check for Debian/Ubuntu package path
+    debian_path = Path("/etc/adguardhome/AdGuardHome.yaml")
+    if debian_path.parent.exists():
+        return debian_path
+    # Default to /opt (Docker/Manual)
+    return Path("/opt/AdGuardHome/AdGuardHome.yaml")
+
+PATHS = {
+    "blocky": Path("/etc/blocky/config.yml"),
+    "adguard": get_adguard_config_path(),
+    "nginx_stream": Path("/etc/nginx/streams-enabled/ai-proxy.conf"),
+    "nginx_http": Path("/etc/nginx/sites-enabled/local-services.conf"),
+    "angie_stream": Path("/etc/angie/stream.d/ai-proxy.conf"),
+    "angie_http": Path("/etc/angie/http.d/local-services.conf"),
+}
+
+def check_nginx_stream_inclusion():
+    """Check if Nginx is configured to include stream configs."""
+    nginx_conf = Path("/etc/nginx/nginx.conf")
+    if not nginx_conf.exists():
+        return
+
+    try:
+        content = nginx_conf.read_text()
+        if "stream {" not in content:
+            Console.warn("Nginx configuration (/etc/nginx/nginx.conf) does not seem to have a 'stream' block.")
+            Console.warn("Layer 4 proxying might not work. Please add 'include /etc/nginx/streams-enabled/*.conf;' inside a 'stream {}' block.")
+        elif "streams-enabled" not in content:
+             Console.warn("Nginx 'stream' block detected, but it might not include /etc/nginx/streams-enabled/*.conf")
+    except Exception:
+        pass
+
+def detect_stack() -> Tuple[str, str]:
+    """Detect active Proxy and DNS services."""
+    proxy = 'none'
+    if is_active('angie'):
+        proxy = 'angie'
+    elif is_active('nginx'):
+        proxy = 'nginx'
+    elif PATHS['angie_stream'].parent.exists():
+        proxy = 'angie'
+    elif PATHS['nginx_stream'].parent.exists() or Path("/etc/nginx").exists():
+        proxy = 'nginx'
+
+    dns = 'none'
+    if is_active('AdGuardHome'):
+        dns = 'adguard'
+    elif is_active('blocky'):
+        dns = 'blocky'
+    elif PATHS['adguard'].parent.exists():
+        dns = 'adguard'
+    elif PATHS['blocky'].parent.exists():
+        dns = 'blocky'
+
+    return proxy, dns
+
+DEFAULTS = {
+    "local_ip": "127.0.0.1",
+    "dns_port": 53,
+    "doh_port": 8443,
+    "dot_port": 853
+}
+
+def detect_public_ip() -> str:
+    """Detect public IP address from multiple sources."""
+    sources = [
+        'https://api.ipify.org',
+        'https://ifconfig.me/ip',
+        'https://icanhazip.com'
+    ]
+
+    for url in sources:
+        try:
+            result = subprocess.run(
+                ['curl', '-s', '-m', '5', url],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ip = result.stdout.strip()
+                if validate_ip(ip):
+                    return ip
+        except Exception:
+            continue
+
+    Console.warn("Could not detect public IP. Using 0.0.0.0 as placeholder.")
+    return "0.0.0.0"
+
+# --- YAML Customization ---
+
+def datetime_representer(dumper, data):
+    """Force ISO format for datetimes to satisfy AdGuardHome strict parsing."""
+    return dumper.represent_scalar('tag:yaml.org,2002:timestamp', data.isoformat())
+
+yaml.add_representer(datetime, datetime_representer)
+
+# --- UI & Logging ---
+
+class Style:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    RED = '\033[31m'
+    BLUE = '\033[34m'
+    CYAN = '\033[36m'
+    MAGENTA = '\033[35m'
+
+class Console:
+    @staticmethod
+    def info(msg: str):
+        print(f"{Style.BLUE}ℹ{Style.RESET} {msg}")
+
+    @staticmethod
+    def success(msg: str):
+        print(f"{Style.GREEN}✔{Style.RESET} {msg}")
+
+    @staticmethod
+    def warn(msg: str):
+        print(f"{Style.YELLOW}⚠{Style.RESET} {msg}")
+
+    @staticmethod
+    def error(msg: str, exit_code: int = 0):
+        print(f"{Style.RED}✖ Error:{Style.RESET} {msg}", file=sys.stderr)
+        if exit_code:
+            sys.exit(exit_code)
+
+    @staticmethod
+    def header(msg: str):
+        print(f"\n{Style.BOLD}{Style.MAGENTA}:: {msg}{Style.RESET}")
+
+# --- System Helpers ---
+
+def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
+    # Skip systemctl commands in Docker/non-systemd env
+    if cmd[0] == 'systemctl':
+        # Check if systemd is running
+        if not os.path.exists("/run/systemd/system"):
+            Console.info(f"Skipping systemd command: {' '.join(cmd)}")
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        # If not root, try sudo for systemctl
+        if os.geteuid() != 0:
+            cmd = ['sudo'] + cmd
+
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    except subprocess.CalledProcessError as e:
+        Console.error(f"Command failed: {' '.join(cmd)}\nStderr: {e.stderr}")
+        raise
+
+def is_active(service: str) -> bool:
+    """Check if a service is active (systemd or process check)."""
+    # Systemd check
+    if os.path.exists("/run/systemd/system"):
+        try:
+            proc = subprocess.run(['systemctl', 'is-active', service], capture_output=True, text=True)
+            return proc.returncode == 0
+        except Exception:
+            pass
+
+    # Process check (fallback for Docker)
+    try:
+        # Simple pgrep check
+        proc = subprocess.run(['pgrep', '-f', service], capture_output=True)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+def detect_stack() -> Tuple[str, str]:
+    """Detect active Proxy and DNS services."""
+    proxy = 'none'
+    if is_active('angie'):
+        proxy = 'angie'
+    elif is_active('nginx'):
+        proxy = 'nginx'
+    elif PATHS['angie_stream'].parent.exists():
+        proxy = 'angie'
+    elif PATHS['nginx_stream'].parent.exists():
+        proxy = 'nginx'
+
+    dns = 'none'
+    if is_active('AdGuardHome'):
+        dns = 'adguard'
+    elif is_active('blocky'):
+        dns = 'blocky'
+    elif PATHS['adguard'].parent.exists():
+        dns = 'adguard'
+    elif PATHS['blocky'].parent.exists():
+        dns = 'blocky'
+
+    return proxy, dns
+
+# --- Configuration Management ---
+
+def load_config() -> Dict[str, Any]:
+    if not CONFIG_FILE.exists():
+        # Auto-detect public IP on first run
+        public_ip = detect_public_ip()
+        Console.info(f"Detected public IP: {public_ip}")
+        initial_config = {
+            'settings': {'proxy_ip': public_ip},
+            'domains': {}
+        }
+        # Save initial config
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        save_config(initial_config)
+        Console.success(f"Created initial configuration at {CONFIG_FILE}")
+        return initial_config
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return yaml.safe_load(f) or {'settings': {}, 'domains': {}}
+    except Exception as e:
+        Console.error(f"Failed to load config: {e}", 1)
+
+def save_config(config: Dict[str, Any]):
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            yaml.dump(config, f, sort_keys=False)
+    except Exception as e:
+        Console.error(f"Failed to save config: {e}", 1)
+
+def backup_configs():
+    BACKUP_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    backed_up = []
+    files_to_backup = list(PATHS.values()) + [CONFIG_FILE]
+
+    for path in files_to_backup:
+        if path.exists():
+            dest = BACKUP_DIR / f"{path.name}_{timestamp}.bak"
+            shutil.copy2(path, dest)
+            backed_up.append(path.name)
+
+            # Remove old backups, keep only the latest one
+            old_backups = sorted(BACKUP_DIR.glob(f"{path.name}_*.bak"))
+            for old_backup in old_backups[:-1]:  # Keep the last one (newest)
+                old_backup.unlink()
+
+    if backed_up:
+        Console.info(f"Backups created: {', '.join(backed_up)}")
+
+# --- Certificate Logic ---
+
+def get_dns_domain(config: Dict[str, Any]) -> Optional[str]:
+    """Determine the primary DNS domain for TLS."""
+    # 1. Explicit setting
+    if config.get('settings', {}).get('dns_domain'):
+        return config['settings']['dns_domain']
+
+    # 2. Heuristic
+    for domain in config.get('domains', {}):
+        if domain.startswith(('doh.', 'dns.')):
+            return domain
+    return None
+
+def get_cert_paths(domain: str, active_proxy: str) -> Tuple[Optional[str], Optional[str]]:
+    """Locate certificates based on the active proxy."""
+    if not domain:
+        return None, None
+
+    cert, key = None, None
+
+    if active_proxy == 'angie':
+        # Angie ACME stores certs in /var/lib/angie/acme/acme_{domain_sanitized}/
+        # Sanitize domain name (replace dots and dashes with underscores)
+        client_name = domain.replace('.', '_').replace('-', '_')
+        base = Path(f"/var/lib/angie/acme/acme_{client_name}")
+        cert = base / "certificate.pem"
+        key = base / "private.key"
+
+        # Check if certificates exist and are not empty
+        if cert.exists() and key.exists() and cert.stat().st_size > 0:
+            return str(cert), str(key)
+
+        # Fallback to old letsencrypt path (for backward compatibility)
+        old_base = Path("/var/lib/angie/acme/letsencrypt")
+        old_cert = old_base / "certificate.pem"
+        old_key = old_base / "private.key"
+        if old_cert.exists() and old_key.exists() and old_cert.stat().st_size > 0:
+            return str(old_cert), str(old_key)
+
+    elif active_proxy == 'nginx':
+        base = Path(f"/etc/letsencrypt/live/{domain}")
+        cert = base / "fullchain.pem"
+        key = base / "privkey.pem"
+
+        if cert.exists() and key.exists():
+            return str(cert), str(key)
+
+    # Final fallback check (Certbot path)
+    legacy_base = Path(f"/etc/letsencrypt/live/{domain}")
+    if legacy_base.exists():
+        cert = legacy_base / "fullchain.pem"
+        key = legacy_base / "privkey.pem"
+        if cert.exists() and key.exists():
+            return str(cert), str(key)
+
+    return None, None
+
+# --- Sync Implementations ---
+
+def sync_blocky(config: Dict[str, Any], active_proxy: str):
+    Console.info("Syncing Blocky...")
+    try:
+        proxy_ip = config['settings'].get('proxy_ip')
+        if not proxy_ip or proxy_ip == '0.0.0.0':
+            proxy_ip = detect_public_ip()
+            config['settings']['proxy_ip'] = proxy_ip
+            save_config(config)
+            Console.info(f"Updated proxy_ip to: {proxy_ip}")
+
+        mapping = {domain: proxy_ip for domain in config['domains']}
+
+        blocky_cfg = {
+            'upstreams': {'groups': {'default': ['https://8.8.8.8/dns-query', 'https://1.1.1.1/dns-query']}},
+            'customDNS': {'mapping': mapping},
+            'ports': {'dns': DEFAULTS['dns_port'], 'http': 4000},
+            'log': {'level': 'info'}
+        }
+
+        # TLS Configuration
+        dns_domain = get_dns_domain(config)
+        cert, key = get_cert_paths(dns_domain, active_proxy)
+        if cert and key:
+            blocky_cfg['ports']['tls'] = DEFAULTS['dot_port']
+            blocky_cfg['ports']['https'] = DEFAULTS['doh_port']
+            blocky_cfg['certFile'] = cert
+            blocky_cfg['keyFile'] = key
+            Console.success(f"TLS enabled for Blocky using {dns_domain}")
+
+        with open(PATHS['blocky'], 'w') as f:
+            yaml.dump(blocky_cfg, f, sort_keys=False)
+
+        run_cmd(['systemctl', 'restart', 'blocky'])
+        Console.success("Blocky restarted")
+    except Exception as e:
+        Console.error(f"Blocky sync failed: {e}")
+
+def sync_adguard(config: Dict[str, Any], active_proxy: str):
+    Console.info("Syncing AdGuardHome...")
+    try:
+        with open(PATHS['adguard'], 'r') as f:
+            agh_cfg = yaml.safe_load(f)
+
+        # Ensure structure
+        agh_cfg.setdefault('filtering', {}).setdefault('rewrites', [])
+
+        proxy_ip = config['settings'].get('proxy_ip')
+        if not proxy_ip or proxy_ip == '0.0.0.0':
+            proxy_ip = detect_public_ip()
+            config['settings']['proxy_ip'] = proxy_ip
+            save_config(config)
+            Console.info(f"Updated proxy_ip to: {proxy_ip}")
+
+        # Filter out old managed rewrites
+        current_rewrites = [r for r in agh_cfg['filtering']['rewrites'] if r.get('answer') != proxy_ip]
+
+        # Add new rewrites
+        new_rewrites = []
+        for domain, data in config['domains'].items():
+            new_rewrites.append({'domain': domain, 'answer': proxy_ip, 'enabled': True})
+            if data.get('type') == 'proxy':
+                new_rewrites.append({'domain': f'*.{domain}', 'answer': proxy_ip, 'enabled': True})
+
+        agh_cfg['filtering']['rewrites'] = current_rewrites + new_rewrites
+
+        # TLS Configuration
+        dns_domain = get_dns_domain(config)
+        cert, key = get_cert_paths(dns_domain, active_proxy)
+        if cert and key:
+            agh_cfg.setdefault('tls', {})
+            agh_cfg['tls'].update({
+                'enabled': True,
+                'server_name': dns_domain,
+                'certificate_path': cert,
+                'private_key_path': key,
+                'port_https': DEFAULTS['doh_port'],
+                'port_dns_over_tls': DEFAULTS['dot_port']
+            })
+            Console.success(f"TLS enabled for AdGuard using {dns_domain}")
+
+        with open(PATHS['adguard'], 'w') as f:
+            yaml.dump(agh_cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        run_cmd(['systemctl', 'restart', 'AdGuardHome'])
+        Console.success("AdGuardHome restarted")
+    except Exception as e:
+        Console.error(f"AdGuard sync failed: {e}")
+
+def sync_angie(config: Dict[str, Any]):
+    Console.info("Syncing Angie...")
+    if not PATHS['angie_stream'].parent.exists(): return
+
+    try:
+        # 1. Stream Config (Layer 4)
+        stream_conf = "resolver 1.1.1.1 8.8.8.8;\n\n"
+        stream_conf += "map $ssl_preread_server_name $backend_name {\n    hostnames;\n"
+
+        proxy_domains = [d for d, v in config['domains'].items() if v.get('type') == 'proxy']
+        service_domains = [d for d, v in config['domains'].items() if v.get('type') == 'service']
+
+        for domain in proxy_domains:
+            stream_conf += f"    .{domain} $ssl_preread_server_name;\n"
+
+        stream_conf += "}\n\n"
+        stream_conf += "server {\n    listen 443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
+
+        if service_domains:
+            stream_conf += "server {\n    listen 443;\n"
+            stream_conf += f"    server_name {' '.join(service_domains)};\n"
+            stream_conf += "    proxy_pass 127.0.0.1:44301;\n    ssl_preread on;\n}\n"
+
+        with open(PATHS['angie_stream'], 'w') as f:
+            f.write(stream_conf)
+
+        # 2. Update main Angie config with separate ACME clients for each domain
+        angie_main_conf = Path("/etc/angie/angie.conf")
+        if angie_main_conf.exists():
+            with open(angie_main_conf, 'r') as f:
+                main_conf_lines = f.readlines()
+
+            # Find http block and insert ACME clients before include directive
+            new_lines = []
+            in_http_block = False
+            acme_inserted = False
+            skip_acme_block = False
+
+            for line in main_conf_lines:
+                if 'http {' in line:
+                    in_http_block = True
+                    new_lines.append(line)
+                elif in_http_block and 'acme_client' in line and not acme_inserted:
+                    # Start skipping old acme_client block
+                    skip_acme_block = True
+                    continue
+                elif skip_acme_block and (line.strip().startswith('email=') or line.strip().startswith('acme_client') or (line.strip() == '' and skip_acme_block)):
+                    # Continue skipping related lines (email, subsequent clients, empty lines)
+                    if 'include' in line:
+                        skip_acme_block = False
+                    else:
+                        continue
+                elif in_http_block and 'include /etc/angie/http.d/*.conf' in line and not acme_inserted:
+                    skip_acme_block = False
+                    # Insert new ACME clients before include
+                    if service_domains:
+                        new_lines.append('\n    # ACME clients for automatic SSL/TLS certificates (one per domain)\n')
+                        for domain in service_domains:
+                            # Sanitize domain name for client name (replace dots with underscores)
+                            client_name = domain.replace('.', '_').replace('-', '_')
+                            new_lines.append(f'    acme_client acme_{client_name} https://acme-v02.api.letsencrypt.org/directory;\n\n')
+                    acme_inserted = True
+                    new_lines.append(line)
+                else:
+                    new_lines.append(line)
+
+            with open(angie_main_conf, 'w') as f:
+                f.writelines(new_lines)
+
+        # 3. HTTP Config (Layer 7) with Native ACME - separate certs per domain
+        http_conf = ""
+
+        # HTTP server for ACME challenges and redirects
+        http_conf += """# HTTP server for ACME challenges
+server {
+    listen 80;
+    server_name _;
+
+    # ACME challenge handled automatically by Angie
+    location /.well-known/acme-challenge/ {
+        # Angie ACME module handles this
+    }
+
+    # Redirect to HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+"""
+
+        # HTTPS servers for each service with separate ACME clients
+        for domain in service_domains:
+            data = config['domains'][domain]
+            ip = data.get('ip', DEFAULTS['local_ip'])
+            port = data.get('port')
+
+            # Sanitize domain name for ACME client and certificate paths
+            client_name = domain.replace('.', '_').replace('-', '_')
+            cert_path = f"/var/lib/angie/acme/acme_{client_name}/certificate.pem"
+            key_path = f"/var/lib/angie/acme/acme_{client_name}/private.key"
+
+            # Fallback to snakeoil if ACME certs don't exist or are empty
+            cert_file = Path(cert_path)
+            if not cert_file.exists() or cert_file.stat().st_size == 0:
+                cert_path = "/etc/ssl/certs/ssl-cert-snakeoil.pem"
+                key_path = "/etc/ssl/private/ssl-cert-snakeoil.key"
+
+            http_conf += f"""# Service: {domain}
+server {{
+    listen 44301 ssl;
+    server_name {domain};
+
+    # Native ACME for automatic certificate management (separate cert)
+    acme acme_{client_name};
+
+    # Certificate paths (managed by ACME)
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
+
+    # Proxy to backend
+    location / {{
+        proxy_pass http://{ip}:{port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }}
+}}
+
+"""
+
+        with open(PATHS['angie_http'], 'w') as f:
+            f.write(http_conf)
+
+        run_cmd(['angie', '-t']) # Test config
+        run_cmd(['systemctl', 'reload', 'angie'])
+        Console.success("Angie reloaded with separate ACME certificates per domain")
+
+    except Exception as e:
+        Console.error(f"Angie sync failed: {e}")
+
+def sync_nginx(config: Dict[str, Any]):
+    Console.info("Syncing Nginx...")
+
+    # Ensure directories exist (if we have permission)
+    if not PATHS['nginx_stream'].parent.exists():
+        try:
+            PATHS['nginx_stream'].parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            Console.warn(f"Cannot create {PATHS['nginx_stream'].parent}. Stream config might fail.")
+
+    check_nginx_stream_inclusion()
+
+    try:
+        # 1. Stream Config (Layer 4)
+        stream_conf = "resolver 1.1.1.1 8.8.8.8;\n\n"
+        stream_conf += "map $ssl_preread_server_name $backend_name {\n    hostnames;\n"
+
+        proxy_domains = [d for d, v in config['domains'].items() if v.get('type') == 'proxy']
+        service_domains = [d for d, v in config['domains'].items() if v.get('type') == 'service']
+
+        for domain in proxy_domains:
+            stream_conf += f"    .{domain} $ssl_preread_server_name;\n"
+
+        stream_conf += "}\n\n"
+        stream_conf += "server {\n    listen 443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
+
+        if service_domains:
+            stream_conf += "server {\n    listen 443;\n"
+            stream_conf += f"    server_name {' '.join(service_domains)};\n"
+            stream_conf += "    proxy_pass 127.0.0.1:44301;\n    ssl_preread on;\n}\n"
+
+        with open(PATHS['nginx_stream'], 'w') as f:
+            f.write(stream_conf)
+
+        # 2. HTTP Config (Layer 7)
+        http_conf = ""
+
+        # Ensure ACME challenge handling is active before issuing certs
+        acme_conf = """
+server {
+    listen 80;
+    server_name _;
+    location ^~ /.well-known/acme-challenge/ {
+        proxy_pass http://127.0.0.1:9180;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+"""
+        # Write initial config with ACME support to ensure Nginx can route challenges
+        # We append a placeholder for services to be valid
+        with open(PATHS['nginx_http'], 'w') as f:
+            f.write(acme_conf)
+
+        run_cmd(['systemctl', 'reload', 'nginx'])
+
+        for domain in service_domains:
+            data = config['domains'][domain]
+            ip = data.get('ip', DEFAULTS['local_ip'])
+            port = data.get('port')
+
+            # Certificate Management
+            cert_path = Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem")
+            key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
+
+            if not cert_path.exists():
+                Console.info(f"Issuing certificate for {domain}...")
+                # Nginx is already routing /.well-known/acme-challenge/ to 9180
+                cmd = [
+                    'certbot', 'certonly', '--standalone',
+                    '--http-01-port', '9180',
+                    '-d', domain,
+                    '--deploy-hook', 'systemctl reload nginx',
+                    '--non-interactive', '--agree-tos', '--register-unsafely-without-email'
+                ]
+                res = run_cmd(cmd)
+                if res.returncode == 0:
+                    Console.success(f"Certificate issued for {domain}")
+                else:
+                    Console.error(f"Failed to issue certificate for {domain}: {res.stderr}")
+
+            # Ensure renewal hook is set for existing certs
+            renewal_conf = Path(f"/etc/letsencrypt/renewal/{domain}.conf")
+            if renewal_conf.exists():
+                try:
+                    content = renewal_conf.read_text()
+                    if "systemctl reload nginx" not in content:
+                        Console.info(f"Adding renewal hook for {domain}...")
+                        # Append hook to renewal params
+                        with open(renewal_conf, "a") as f:
+                            f.write("\nrenew_hook = systemctl reload nginx\n")
+                except Exception as e:
+                    Console.warn(f"Failed to update renewal hook for {domain}: {e}")
+
+            # Use LE certs if available, otherwise fallback to snakeoil
+            if cert_path.exists() and key_path.exists():
+                ssl_cert = str(cert_path)
+                ssl_key = str(key_path)
+            else:
+                Console.warn(f"Using snakeoil cert for {domain}")
+                ssl_cert = "/etc/ssl/certs/ssl-cert-snakeoil.pem"
+                ssl_key = "/etc/ssl/private/ssl-cert-snakeoil.key"
+
+            http_conf += f"""
+server {{
+    listen 44301 ssl;
+    server_name {domain};
+    ssl_certificate {ssl_cert};
+    ssl_certificate_key {ssl_key};
+    location / {{
+        proxy_pass http://{ip}:{port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }}
+}}
+"""
+        # Final config with services and ACME
+        with open(PATHS['nginx_http'], 'w') as f:
+            f.write(http_conf + acme_conf)
+
+        run_cmd(['systemctl', 'reload', 'nginx'])
+        Console.success("Nginx reloaded")
+
+    except Exception as e:
+        Console.error(f"Nginx sync failed: {e}")
+
+# --- Commands ---
+
+def cmd_sync(args):
+    proxy, dns = detect_stack()
+    Console.header(f"Syncing Configuration (Proxy: {proxy.upper()}, DNS: {dns.upper()})")
+
+    if proxy == 'none' and dns == 'none':
+        Console.warn("No active services detected. Nothing to sync.")
+        Console.info("To install components:")
+        Console.info("  Debian/Ubuntu: apt install flowgate-full")
+        Console.info("  Manual: make install-all")
+        return
+
+    backup_configs()
+    config = load_config()
+
+    if dns == 'blocky':
+        sync_blocky(config, proxy)
+    elif dns == 'adguard':
+        sync_adguard(config, proxy)
+
+    if proxy == 'nginx':
+        sync_nginx(config)
+    elif proxy == 'angie':
+        sync_angie(config)
+
+    Console.header("Sync Completed Successfully")
+
+def cmd_add(args):
+    config = load_config()
+    changed = False
+
+    for domain in args.domains:
+        # Validate domain format
+        if not validate_domain(domain):
+            Console.error(f"Invalid domain format: {domain}")
+            continue
+
+        if domain not in config['domains']:
+            config['domains'][domain] = {'type': 'proxy'}
+            Console.success(f"Added proxy: {domain}")
+            changed = True
+        else:
+            Console.warn(f"Exists: {domain}")
+
+    if changed:
+        save_config(config)
+        cmd_sync(args)
+
+def cmd_service(args):
+    # Validate all inputs
+    if not validate_domain(args.domain):
+        Console.error(f"Invalid domain format: {args.domain}", 1)
+    if not validate_port(args.port):
+        Console.error(f"Invalid port: {args.port} (must be 1-65535)", 1)
+    if not validate_ip(args.ip):
+        Console.error(f"Invalid IP address: {args.ip}", 1)
+
+    config = load_config()
+    config['domains'][args.domain] = {
+        'type': 'service',
+        'port': args.port,
+        'ip': args.ip
+    }
+    Console.success(f"Set service: {args.domain} -> {args.ip}:{args.port}")
+    save_config(config)
+    cmd_sync(args)
+
+def cmd_dns(args):
+    # Validate domain format
+    if not validate_domain(args.domain):
+        Console.error(f"Invalid domain format: {args.domain}", 1)
+
+    config = load_config()
+
+    # Ensure domain exists as a service if not present
+    if args.domain not in config['domains']:
+        Console.info(f"Adding {args.domain} as a local service (port 8443)...")
+        config['domains'][args.domain] = {
+            'type': 'service',
+            'ip': DEFAULTS['local_ip'],
+            'port': DEFAULTS['doh_port']
+        }
+
+    config.setdefault('settings', {})['dns_domain'] = args.domain
+    Console.success(f"Primary DNS domain set to: {args.domain}")
+
+    save_config(config)
+    cmd_sync(args)
+
+def cmd_remove(args):
+    config = load_config()
+    changed = False
+
+    for domain in args.domains:
+        if domain in config['domains']:
+            del config['domains'][domain]
+            Console.success(f"Removed: {domain}")
+            changed = True
+        else:
+            Console.warn(f"Not found: {domain}")
+
+    if changed:
+        save_config(config)
+        cmd_sync(args)
+
+def cmd_status(args):
+    Console.header("Service Status")
+
+    # Check states
+    s_nginx = is_active('nginx')
+    s_angie = is_active('angie')
+    s_blocky = is_active('blocky')
+    s_adguard = is_active('AdGuardHome')
+    s_flowweb = is_active('flowweb')
+    s_certbot = is_active('certbot.timer')
+
+    # DNS redundancy check: Critical if BOTH are down
+    dns_down = not (s_blocky or s_adguard)
+    # Proxy redundancy check
+    proxy_down = not (s_nginx or s_angie)
+
+    def print_svc(name, active, critical=True):
+        if active:
+            status = f"{Style.GREEN}ACTIVE{Style.RESET}"
+        else:
+            status = f"{Style.RED}INACTIVE{Style.RESET}" if critical else f"{Style.DIM}INACTIVE{Style.RESET}"
+        print(f"  {name:<15} {status}")
+
+    print_svc('Nginx', s_nginx, critical=proxy_down)
+    print_svc('Angie', s_angie, critical=proxy_down)
+    print_svc('Blocky', s_blocky, critical=dns_down)
+    print_svc('AdGuardHome', s_adguard, critical=dns_down)
+    print_svc('FlowWeb', s_flowweb, critical=False) # Web UI is optional
+    print_svc('Certbot Timer', s_certbot, critical=s_nginx) # Certbot only needed for Nginx
+
+    config = load_config()
+    domains = config.get('domains', {})
+
+    if not domains:
+        Console.info("No domains configured.")
+        if proxy_down and dns_down:
+             Console.info("\nTo get started, install components:")
+             Console.info("  Debian/Ubuntu: apt install flowgate-full")
+             Console.info("  Manual: make install-all")
+        return
+
+    Console.header(f"Configured Domains ({len(domains)})")
+
+    # Group by type
+    proxies = [d for d, v in domains.items() if v.get('type') == 'proxy']
+    services = [d for d, v in domains.items() if v.get('type') == 'service']
+
+    if services:
+        print(f"\n{Style.BOLD}Local Services:{Style.RESET}")
+        for d in sorted(services):
+            data = domains[d]
+            print(f"  {Style.CYAN}{d:<30}{Style.RESET} → {Style.YELLOW}{data.get('ip')}:{data.get('port')}{Style.RESET}")
+
+    if proxies:
+        print(f"\n{Style.BOLD}Proxies (Passthrough):{Style.RESET}")
+        for d in sorted(proxies):
+            print(f"  {Style.DIM}{d}{Style.RESET}")
+    print()
+
+# --- Main ---
+
+def main():
+    # if os.geteuid() != 0:
+    #    Console.error("This script must be run as root.", 1)
+
+    parser = argparse.ArgumentParser(
+        description="Flowgate - Network Flow Controller (DNS & Proxy Manager)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s add example.com
+  %(prog)s service my-app.com 8080
+  %(prog)s dns doh.my-domain.com
+  %(prog)s status
+        """
+    )
+
+    subparsers = parser.add_subparsers(dest='command', help='Action to perform')
+    subparsers.required = True
+
+    # Add Proxy
+    p_add = subparsers.add_parser('add', help='Add external domains (Passthrough)')
+    p_add.add_argument('domains', nargs='+', help='List of domains')
+    p_add.set_defaults(func=cmd_add)
+
+    # Add Service
+    p_srv = subparsers.add_parser('service', help='Add/Update local service (Reverse Proxy)')
+    p_srv.add_argument('domain', help='Service domain name')
+    p_srv.add_argument('port', type=int, help='Backend port')
+    p_srv.add_argument('--ip', default=DEFAULTS['local_ip'], help=f"Backend IP (default: {DEFAULTS['local_ip']})")
+    p_srv.set_defaults(func=cmd_service)
+
+    # Set DNS
+    p_dns = subparsers.add_parser('dns', help='Set primary domain for DoH/DoT')
+    p_dns.add_argument('domain', help='DNS domain name')
+    p_dns.set_defaults(func=cmd_dns)
+
+    # Remove
+    p_rm = subparsers.add_parser('remove', help='Remove domains')
+    p_rm.add_argument('domains', nargs='+', help='List of domains')
+    p_rm.set_defaults(func=cmd_remove)
+
+    # Status
+    p_status = subparsers.add_parser('status', help='Show configuration and status')
+    p_status.set_defaults(func=cmd_status)
+
+    # Sync
+    p_sync = subparsers.add_parser('sync', help='Force configuration sync')
+    p_sync.set_defaults(func=cmd_sync)
+
+    args = parser.parse_args()
+    if hasattr(args, 'func'):
+        args.func(args)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()

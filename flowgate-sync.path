@@ -1,0 +1,9 @@
+[Unit]
+Description=Monitor Flowgate configuration for changes
+Documentation=https://github.com/crim50n/flowgate
+
+[Path]
+PathModified=/etc/flowgate/flowgate.yaml
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,98 @@
+# Stage 1: Final Image
+FROM alpine:3.20
+
+# Install dependencies and Nginx
+RUN apk add --no-cache nginx nginx-mod-stream certbot \
+    python3 \
+    py3-pip \
+    py3-yaml \
+    curl \
+    bash \
+    ca-certificates \
+    openssl \
+    tzdata \
+    gcc \
+    python3-dev \
+    libffi-dev \
+    libcap \
+    sudo \
+    musl-dev
+
+# Create users
+RUN addgroup -S flowgate && adduser -S -D -H -h /var/lib/flowgate -s /sbin/nologin -G flowgate flowgate && \
+    addgroup -S adguardhome && adduser -S -D -H -h /opt/AdGuardHome -s /sbin/nologin -G adguardhome adguardhome
+
+# Python packages for FlowWeb
+RUN pip3 install --no-cache-dir --break-system-packages \
+    fastapi \
+    uvicorn \
+    jinja2 \
+    python-multipart \
+    "passlib[bcrypt]" \
+    "bcrypt==4.0.1" \
+    pyotp \
+    itsdangerous \
+    pyyaml
+
+# Install AdGuardHome
+ARG ADGUARD_VERSION=v0.107.71
+RUN curl -L -o /tmp/AdGuardHome.tar.gz https://github.com/AdguardTeam/AdGuardHome/releases/download/${ADGUARD_VERSION}/AdGuardHome_linux_amd64.tar.gz && \
+    tar xzf /tmp/AdGuardHome.tar.gz -C /opt && \
+    rm /tmp/AdGuardHome.tar.gz && \
+    mv /opt/AdGuardHome/AdGuardHome /usr/local/bin/AdGuardHome && \
+    rm -rf /opt/AdGuardHome && \
+    mkdir -p /opt/AdGuardHome && \
+    chown adguardhome:adguardhome /opt/AdGuardHome && \
+    chmod +x /usr/local/bin/AdGuardHome
+
+# Set capabilities for AdGuardHome
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/AdGuardHome
+
+# Setup Directories
+RUN mkdir -p /etc/flowgate /var/lib/flowgate/backups /etc/nginx/streams-enabled /etc/nginx/sites-enabled
+
+# Copy default AdGuardHome config
+COPY AdGuardHome.yaml.default /opt/AdGuardHome/AdGuardHome.yaml
+RUN chown adguardhome:adguardhome /opt/AdGuardHome/AdGuardHome.yaml
+
+# Configure Nginx
+# Remove default conf
+RUN rm -f /etc/nginx/http.d/default.conf
+# Add main nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Copy flowgate script
+COPY flowgate /usr/bin/flowgate
+RUN chmod +x /usr/bin/flowgate
+
+# Copy default config
+COPY flowgate.yaml.default /etc/flowgate/flowgate.yaml.default
+
+# Configure sudoers
+COPY flowgate.sudoers /etc/sudoers.d/flowgate
+RUN chmod 440 /etc/sudoers.d/flowgate
+
+# Copy Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy FlowWeb
+COPY web /usr/share/flowgate
+
+# Set ownership
+RUN chown -R flowgate:flowgate /etc/flowgate /var/lib/flowgate /usr/share/flowgate && \
+    chown -R adguardhome:adguardhome /opt/AdGuardHome
+
+# Expose Ports
+# 80/443 - HTTP/HTTPS (Nginx)
+# 853 - DNS over TLS (AdGuardHome)
+# 3000 - AdGuardHome Web UI
+EXPOSE 80/tcp 443/tcp 853/tcp 3000/tcp
+
+# Environment Variables
+ENV PROXY_IP="auto"
+ENV DNS_DOMAIN=""
+ENV DNS_UPSTREAM="https://8.8.8.8/dns-query,https://1.1.1.1/dns-query"
+ENV ENABLE_WEB_UI="false"
+
+ENTRYPOINT ["/entrypoint.sh"]

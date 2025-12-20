@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove configuration and data
+        rm -rf /etc/flowgate
+        rm -rf /var/lib/flowgate
+
+        # Remove user and group
+        if id -u flowgate >/dev/null 2>&1; then
+            userdel flowgate 2>/dev/null || true
+        fi
+        if getent group flowgate >/dev/null; then
+            groupdel flowgate 2>/dev/null || true
+        fi
+        ;;
+
+    remove)
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

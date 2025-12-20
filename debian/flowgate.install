@@ -1,0 +1,6 @@
+usr/bin/flowgate
+etc/flowgate/flowgate.yaml.default
+etc/sudoers.d/flowgate
+usr/lib/systemd/system/flowgate.service
+usr/lib/systemd/system/flowgate-sync.service
+usr/lib/systemd/system/flowgate-sync.path

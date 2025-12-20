@@ -1,0 +1,42 @@
+settings:
+  proxy_ip: "0.0.0.0" # Will be replaced by entrypoint or env var
+domains:
+  # AI Services (Passthrough)
+  aistudio.google.com: {type: proxy}
+  aistudiocdn.com: {type: proxy}
+  alkalimakersuite-pa.clients6.google.com: {type: proxy}
+  anthropic.com: {type: proxy}
+  api.github.com: {type: proxy}
+  bard.google.com: {type: proxy}
+  character.ai: {type: proxy}
+  chatgpt.com: {type: proxy}
+  claude.ai: {type: proxy}
+  clients6.google.com: {type: proxy}
+  cohere.ai: {type: proxy}
+  copilot-proxy.githubusercontent.com: {type: proxy}
+  copilot.microsoft.com: {type: proxy}
+  deepl.com: {type: proxy}
+  edgeservices.bing.com: {type: proxy}
+  fal.ai: {type: proxy}
+  fal.media: {type: proxy}
+  gemini.google.com: {type: proxy}
+  generativelanguage.googleapis.com: {type: proxy}
+  github.com: {type: proxy}
+  githubcopilot.com: {type: proxy}
+  grok.com: {type: proxy}
+  huggingface.co: {type: proxy}
+  meta.ai: {type: proxy}
+  midjourney.com: {type: proxy}
+  mistral.ai: {type: proxy}
+  musicgpt.com: {type: proxy}
+  openai.com: {type: proxy}
+  perplexity.ai: {type: proxy}
+  pi.ai: {type: proxy}
+  poe.com: {type: proxy}
+  replicate.com: {type: proxy}
+  stability.ai: {type: proxy}
+  static.microsoft: {type: proxy}
+  sydney.bing.com: {type: proxy}
+  udio.com: {type: proxy}
+  x.ai: {type: proxy}
+  you.com: {type: proxy}
