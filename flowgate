@@ -458,10 +458,10 @@ def sync_angie(config: Dict[str, Any]):
             stream_conf += f"    .{domain} $ssl_preread_server_name;\n"
 
         stream_conf += "}\n\n"
-        stream_conf += "server {\n    listen 443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
+        stream_conf += "server {\n    listen 443;\n    listen [::]:443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
 
         if service_domains:
-            stream_conf += "server {\n    listen 443;\n"
+            stream_conf += "server {\n    listen 443;\n    listen [::]:443;\n"
             stream_conf += f"    server_name {' '.join(service_domains)};\n"
             stream_conf += "    proxy_pass 127.0.0.1:44301;\n    ssl_preread on;\n}\n"
 
@@ -608,10 +608,10 @@ def sync_nginx(config: Dict[str, Any]):
             stream_conf += f"    .{domain} $ssl_preread_server_name;\n"
 
         stream_conf += "}\n\n"
-        stream_conf += "server {\n    listen 443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
+        stream_conf += "server {\n    listen 443;\n    listen [::]:443;\n    proxy_pass $backend_name:443;\n    ssl_preread on;\n}\n\n"
 
         if service_domains:
-            stream_conf += "server {\n    listen 443;\n"
+            stream_conf += "server {\n    listen 443;\n    listen [::]:443;\n"
             stream_conf += f"    server_name {' '.join(service_domains)};\n"
             stream_conf += "    proxy_pass 127.0.0.1:44301;\n    ssl_preread on;\n}\n"
 
