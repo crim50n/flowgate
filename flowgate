@@ -184,17 +184,148 @@ class Console:
 
 # --- System Helpers ---
 
-def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
-    # Skip systemctl commands in Docker/non-systemd env
-    if cmd[0] == 'systemctl':
-        # Check if systemd is running
-        if not os.path.exists("/run/systemd/system"):
-            Console.info(f"Skipping systemd command: {' '.join(cmd)}")
-            return subprocess.CompletedProcess(args=cmd, returncode=0)
+def detect_init_system() -> str:
+    """Detect the init system in use."""
+    if os.path.exists("/run/systemd/system"):
+        return "systemd"
+    elif os.path.exists("/run/openrc"):
+        return "openrc"
+    elif os.path.exists("/etc/init.d") and shutil.which("service"):
+        return "sysvinit"
+    elif shutil.which("sv"):
+        return "runit"
+    elif shutil.which("s6-svc"):
+        return "s6"
+    else:
+        return "none"
 
-        # If not root, try sudo for systemctl
+def service_control(service: str, action: str) -> subprocess.CompletedProcess:
+    """Control a service using the appropriate init system.
+
+    Args:
+        service: Service name (e.g., 'nginx', 'blocky')
+        action: Action to perform ('start', 'stop', 'restart', 'reload', 'status')
+
+    Returns:
+        CompletedProcess with returncode and output
+    """
+    init_system = detect_init_system()
+
+    # Map service names for different systems
+    service_map = {
+        'AdGuardHome': {'sysvinit': 'adguardhome', 'openrc': 'adguardhome'},
+    }
+    svc_name = service_map.get(service, {}).get(init_system, service)
+
+    cmd = []
+
+    if init_system == "systemd":
+        cmd = ['systemctl', action, svc_name]
         if os.geteuid() != 0:
             cmd = ['sudo'] + cmd
+
+    elif init_system == "openrc":
+        cmd = ['rc-service', svc_name, action]
+        if os.geteuid() != 0:
+            cmd = ['sudo'] + cmd
+
+    elif init_system == "sysvinit":
+        if action == 'reload':
+            # sysvinit may not support reload, try it anyway
+            cmd = ['service', svc_name, 'reload']
+        else:
+            cmd = ['service', svc_name, action]
+        if os.geteuid() != 0:
+            cmd = ['sudo'] + cmd
+
+    elif init_system == "runit":
+        action_map = {'start': 'up', 'stop': 'down', 'restart': 'restart', 'reload': 'hup', 'status': 'status'}
+        runit_action = action_map.get(action, action)
+        cmd = ['sv', runit_action, svc_name]
+        if os.geteuid() != 0:
+            cmd = ['sudo'] + cmd
+
+    elif init_system == "s6":
+        action_map = {'start': '-u', 'stop': '-d', 'restart': '-r', 'reload': '-h', 'status': ''}
+        s6_action = action_map.get(action, '')
+        if s6_action:
+            cmd = ['s6-svc', s6_action, f'/run/service/{svc_name}']
+        else:
+            cmd = ['s6-svstat', f'/run/service/{svc_name}']
+        if os.geteuid() != 0:
+            cmd = ['sudo'] + cmd
+
+    else:
+        # No init system - try to send signal directly to process
+        if action == 'reload':
+            # Find PID and send SIGHUP
+            try:
+                result = subprocess.run(['pgrep', '-f', service], capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    pid = result.stdout.strip().split()[0]
+                    cmd = ['kill', '-HUP', pid]
+                    if os.geteuid() != 0:
+                        cmd = ['sudo'] + cmd
+                else:
+                    Console.warn(f"Cannot reload {service}: process not found")
+                    return subprocess.CompletedProcess(args=[], returncode=1)
+            except Exception:
+                Console.warn(f"Cannot reload {service}: pgrep failed")
+                return subprocess.CompletedProcess(args=[], returncode=1)
+        elif action == 'restart':
+            # Try to kill and let supervisor restart, or just kill
+            try:
+                result = subprocess.run(['pgrep', '-f', service], capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    pid = result.stdout.strip().split()[0]
+                    cmd = ['kill', '-TERM', pid]
+                    if os.geteuid() != 0:
+                        cmd = ['sudo'] + cmd
+                    Console.info(f"Sent SIGTERM to {service} (PID {pid})")
+                else:
+                    Console.warn(f"Cannot restart {service}: process not found")
+                    return subprocess.CompletedProcess(args=[], returncode=0)
+            except Exception:
+                Console.warn(f"Cannot restart {service}")
+                return subprocess.CompletedProcess(args=[], returncode=1)
+        else:
+            Console.info(f"No init system detected. Skipping {action} for {service}")
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+    if cmd:
+        try:
+            Console.info(f"Running: {' '.join(cmd)}")
+            return subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except Exception as e:
+            Console.warn(f"Failed to {action} {service}: {e}")
+            return subprocess.CompletedProcess(args=cmd, returncode=1)
+
+    return subprocess.CompletedProcess(args=[], returncode=0)
+
+def get_service_reload_command(service: str) -> str:
+    """Get the shell command to reload a service, for use in hooks/scripts."""
+    init_system = detect_init_system()
+
+    if init_system == "systemd":
+        return f"systemctl reload {service}"
+    elif init_system == "openrc":
+        return f"rc-service {service} reload"
+    elif init_system == "sysvinit":
+        return f"service {service} reload"
+    elif init_system == "runit":
+        return f"sv hup {service}"
+    elif init_system == "s6":
+        return f"s6-svc -h /run/service/{service}"
+    else:
+        # Fallback: try to send HUP signal
+        return f"pkill -HUP -f {service}"
+
+def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
+    # Handle systemctl commands through service_control
+    if cmd[0] == 'systemctl' and len(cmd) >= 3:
+        action = cmd[1]  # start, stop, restart, reload
+        service = cmd[2]
+        return service_control(service, action)
 
     try:
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
@@ -203,18 +334,52 @@ def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
         raise
 
 def is_active(service: str) -> bool:
-    """Check if a service is active (systemd or process check)."""
-    # Systemd check
-    if os.path.exists("/run/systemd/system"):
+    """Check if a service is active using appropriate init system."""
+    init_system = detect_init_system()
+
+    # Map service names
+    service_map = {
+        'AdGuardHome': {'sysvinit': 'adguardhome', 'openrc': 'adguardhome'},
+    }
+    svc_name = service_map.get(service, {}).get(init_system, service)
+
+    if init_system == "systemd":
         try:
-            proc = subprocess.run(['systemctl', 'is-active', service], capture_output=True, text=True)
+            proc = subprocess.run(['systemctl', 'is-active', svc_name], capture_output=True, text=True)
             return proc.returncode == 0
         except Exception:
             pass
 
-    # Process check (fallback for Docker)
+    elif init_system == "openrc":
+        try:
+            proc = subprocess.run(['rc-service', svc_name, 'status'], capture_output=True, text=True)
+            return proc.returncode == 0 and 'started' in proc.stdout.lower()
+        except Exception:
+            pass
+
+    elif init_system == "sysvinit":
+        try:
+            proc = subprocess.run(['service', svc_name, 'status'], capture_output=True, text=True)
+            return proc.returncode == 0
+        except Exception:
+            pass
+
+    elif init_system == "runit":
+        try:
+            proc = subprocess.run(['sv', 'status', svc_name], capture_output=True, text=True)
+            return 'run:' in proc.stdout
+        except Exception:
+            pass
+
+    elif init_system == "s6":
+        try:
+            proc = subprocess.run(['s6-svstat', f'/run/service/{svc_name}'], capture_output=True, text=True)
+            return 'up' in proc.stdout
+        except Exception:
+            pass
+
+    # Fallback: Process check (for Docker or no init system)
     try:
-        # Simple pgrep check
         proc = subprocess.run(['pgrep', '-f', service], capture_output=True)
         return proc.returncode == 0
     except Exception:
@@ -352,10 +517,794 @@ def get_cert_paths(domain: str, active_proxy: str) -> Tuple[Optional[str], Optio
 
     return None, None
 
+# --- Configuration Initialization ---
+
+def ensure_blocky_config() -> bool:
+    """Ensure Blocky configuration exists with proper structure."""
+    blocky_dir = PATHS['blocky'].parent
+
+    if not blocky_dir.exists():
+        try:
+            blocky_dir.mkdir(parents=True, exist_ok=True)
+            Console.info(f"Created directory: {blocky_dir}")
+        except PermissionError:
+            Console.error(f"Cannot create {blocky_dir}. Run as root or create manually.")
+            return False
+
+    if not PATHS['blocky'].exists():
+        initial_config = {
+            'upstreams': {
+                'groups': {
+                    'default': [
+                        'https://8.8.8.8/dns-query',
+                        'https://1.1.1.1/dns-query'
+                    ]
+                }
+            },
+            'customDNS': {'mapping': {}},
+            'ports': {'dns': 53, 'http': 4000},
+            'log': {'level': 'info'}
+        }
+        try:
+            with open(PATHS['blocky'], 'w') as f:
+                yaml.dump(initial_config, f, sort_keys=False)
+            Console.success(f"Created initial Blocky config: {PATHS['blocky']}")
+        except PermissionError:
+            Console.error(f"Cannot write to {PATHS['blocky']}. Run as root.")
+            return False
+
+    return True
+
+def ensure_adguard_config() -> bool:
+    """Ensure AdGuardHome configuration exists with proper structure."""
+    adguard_dir = PATHS['adguard'].parent
+
+    if not adguard_dir.exists():
+        try:
+            adguard_dir.mkdir(parents=True, exist_ok=True)
+            Console.info(f"Created directory: {adguard_dir}")
+        except PermissionError:
+            Console.error(f"Cannot create {adguard_dir}. Run as root or create manually.")
+            return False
+
+    if not PATHS['adguard'].exists():
+        initial_config = {
+            'http': {
+                'address': '0.0.0.0:3000'
+            },
+            'dns': {
+                'bind_hosts': ['0.0.0.0'],
+                'port': 53,
+                'upstream_dns': [
+                    'https://dns.cloudflare.com/dns-query',
+                    'https://dns.google/dns-query'
+                ]
+            },
+            'filtering': {
+                'rewrites': []
+            },
+            'tls': {
+                'enabled': False
+            }
+        }
+        try:
+            with open(PATHS['adguard'], 'w') as f:
+                yaml.dump(initial_config, f, default_flow_style=False, sort_keys=False)
+            Console.success(f"Created initial AdGuardHome config: {PATHS['adguard']}")
+        except PermissionError:
+            Console.error(f"Cannot write to {PATHS['adguard']}. Run as root.")
+            return False
+
+    return True
+
+def get_nginx_user() -> str:
+    """Detect the appropriate nginx user for the current system.
+
+    Different distributions use different users:
+    - Debian/Ubuntu: www-data
+    - RHEL/CentOS/Fedora/Alpine: nginx
+    - Arch Linux: http
+    - SUSE/openSUSE: wwwrun
+    - Gentoo: nginx
+    - FreeBSD: www
+    """
+    import pwd
+    # Check which user exists (in order of preference)
+    nginx_users = ['nginx', 'www-data', 'http', 'wwwrun', 'www', '_www']
+    for user in nginx_users:
+        try:
+            pwd.getpwnam(user)
+            return user
+        except KeyError:
+            continue
+    return 'nobody'  # Fallback
+
+def fix_nginx_user(conf_path: Path) -> bool:
+    """Fix nginx user directive to match available system user."""
+    if not conf_path.exists():
+        return False
+
+    try:
+        content = conf_path.read_text()
+        correct_user = get_nginx_user()
+
+        # Check if user directive needs fixing
+        import re
+        match = re.search(r'^user\s+(\w+);', content, re.MULTILINE)
+        if match:
+            current_user = match.group(1)
+            if current_user != correct_user:
+                # Verify current user doesn't exist but correct_user does
+                import pwd
+                try:
+                    pwd.getpwnam(current_user)
+                    return False  # Current user exists, no change needed
+                except KeyError:
+                    pass  # Current user doesn't exist, need to fix
+
+                new_content = re.sub(
+                    r'^user\s+\w+;',
+                    f'user {correct_user};',
+                    content,
+                    count=1,
+                    flags=re.MULTILINE
+                )
+                conf_path.write_text(new_content)
+                Console.info(f"Fixed nginx user: {current_user} -> {correct_user}")
+                return True
+    except PermissionError:
+        Console.warn(f"Cannot modify {conf_path}. Fix user directive manually.")
+    except Exception as e:
+        Console.warn(f"Failed to fix nginx user: {e}")
+
+    return False
+
+def ensure_nginx_config() -> bool:
+    """Ensure Nginx configuration directories and base files exist."""
+    stream_dir = PATHS['nginx_stream'].parent
+    http_dir = PATHS['nginx_http'].parent
+
+    # Create directories
+    for d in [stream_dir, http_dir]:
+        if not d.exists():
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                Console.info(f"Created directory: {d}")
+            except PermissionError:
+                Console.error(f"Cannot create {d}. Run as root.")
+                return False
+
+    # Check/update nginx.conf for stream inclusion
+    nginx_conf = Path("/etc/nginx/nginx.conf")
+    if nginx_conf.exists():
+        # Fix user directive if needed
+        fix_nginx_user(nginx_conf)
+
+        try:
+            content = nginx_conf.read_text()
+            if "stream {" not in content:
+                # Add stream block before the last closing brace or at end
+                stream_block = """
+# Stream configuration for Layer 4 proxying (added by Flowgate)
+stream {
+    include /etc/nginx/streams-enabled/*.conf;
+}
+"""
+                # Insert before final closing brace or append
+                with open(nginx_conf, 'a') as f:
+                    f.write(stream_block)
+                Console.success("Added stream block to nginx.conf")
+        except PermissionError:
+            Console.warn("Cannot modify nginx.conf. Add stream block manually.")
+
+    return True
+
+def ensure_angie_config() -> bool:
+    """Ensure Angie configuration directories and base files exist."""
+    stream_dir = PATHS['angie_stream'].parent
+    http_dir = PATHS['angie_http'].parent
+    angie_conf = Path("/etc/angie/angie.conf")
+
+    # Create directories
+    for d in [stream_dir, http_dir]:
+        if not d.exists():
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                Console.info(f"Created directory: {d}")
+            except PermissionError:
+                Console.error(f"Cannot create {d}. Run as root.")
+                return False
+
+    # Fix user directive in existing config
+    if angie_conf.exists():
+        fix_nginx_user(angie_conf)
+
+    # Create base angie.conf if missing
+    if not angie_conf.exists() and angie_conf.parent.exists():
+        correct_user = get_nginx_user()
+        base_config = f"""user {correct_user};
+worker_processes auto;
+pid /run/angie/angie.pid;
+error_log /var/log/angie/error.log;
+
+events {{
+    worker_connections 1024;
+}}
+
+stream {{
+    include /etc/angie/stream.d/*.conf;
+}}
+
+http {{
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    include /etc/angie/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/angie/access.log;
+    error_log /var/log/angie/error.log;
+
+    gzip on;
+
+    include /etc/angie/http.d/*.conf;
+}}
+"""
+        try:
+            with open(angie_conf, 'w') as f:
+                f.write(base_config)
+            Console.success(f"Created initial Angie config: {angie_conf}")
+
+            # Create mime.types if missing
+            mime_types = angie_conf.parent / "mime.types"
+            if not mime_types.exists():
+                mime_types.touch()
+
+            # Create log directory
+            log_dir = Path("/var/log/angie")
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create run directory
+            run_dir = Path("/run/angie")
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+        except PermissionError:
+            Console.error(f"Cannot write to {angie_conf}. Run as root.")
+            return False
+
+    return True
+
+def ensure_snakeoil_cert() -> bool:
+    """Ensure snakeoil SSL certificate exists for fallback HTTPS."""
+    cert_path = Path("/etc/ssl/certs/ssl-cert-snakeoil.pem")
+    key_path = Path("/etc/ssl/private/ssl-cert-snakeoil.key")
+
+    if cert_path.exists() and key_path.exists():
+        return True
+
+    # Check if openssl is available
+    if not shutil.which('openssl'):
+        Console.warn("OpenSSL not found, cannot generate snakeoil certificate")
+        return False
+
+    try:
+        # Create directories
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Generate self-signed certificate
+        run_cmd([
+            'openssl', 'req', '-x509', '-nodes', '-days', '3650',
+            '-newkey', 'rsa:2048',
+            '-keyout', str(key_path),
+            '-out', str(cert_path),
+            '-subj', '/CN=localhost/O=Flowgate/C=XX'
+        ])
+        Console.success("Generated snakeoil SSL certificate")
+        return True
+    except Exception as e:
+        Console.warn(f"Failed to generate snakeoil cert: {e}")
+        return False
+
+def ensure_configs_for_stack(proxy: str, dns: str) -> bool:
+    """Ensure all required configurations exist for the detected stack."""
+    success = True
+
+    if dns == 'blocky':
+        success = ensure_blocky_config() and success
+    elif dns == 'adguard':
+        success = ensure_adguard_config() and success
+
+    if proxy == 'nginx':
+        success = ensure_nginx_config() and success
+        ensure_snakeoil_cert()  # Needed for fallback HTTPS
+    elif proxy == 'angie':
+        success = ensure_angie_config() and success
+        ensure_snakeoil_cert()  # Needed for fallback HTTPS
+
+    return success
+
+# --- System Requirements Check ---
+
+def check_requirements() -> Dict[str, Any]:
+    """Check system requirements and return diagnostic info."""
+    results = {
+        'os': {},
+        'binaries': {},
+        'services': {},
+        'configs': {},
+        'directories': {},
+        'recommendations': []
+    }
+
+    # OS Info
+    # Get OS info using the new detection
+    os_info = detect_os_info()
+    results['os']['name'] = os_info['name']
+    results['os']['id'] = os_info['id']
+    results['os']['family'] = os_info['family']
+    results['os']['init'] = detect_init_system()
+
+    # Check binaries
+    binaries = {
+        'nginx': 'Nginx reverse proxy',
+        'angie': 'Angie reverse proxy',
+        'blocky': 'Blocky DNS server',
+        'AdGuardHome': 'AdGuardHome DNS server',
+        'certbot': 'Let\'s Encrypt certificate tool',
+        'openssl': 'SSL/TLS toolkit',
+        'curl': 'HTTP client',
+        'python3': 'Python interpreter'
+    }
+
+    for binary, desc in binaries.items():
+        path = shutil.which(binary)
+        results['binaries'][binary] = {
+            'installed': path is not None,
+            'path': path,
+            'description': desc
+        }
+
+    # Check services
+    services = ['nginx', 'angie', 'blocky', 'AdGuardHome', 'flowgate-web']
+    for svc in services:
+        results['services'][svc] = is_active(svc)
+
+    # Check config files
+    config_files = {
+        'flowgate': CONFIG_FILE,
+        'blocky': PATHS['blocky'],
+        'adguard': PATHS['adguard'],
+        'nginx': Path('/etc/nginx/nginx.conf'),
+        'angie': Path('/etc/angie/angie.conf'),
+    }
+
+    for name, path in config_files.items():
+        results['configs'][name] = {
+            'exists': path.exists(),
+            'path': str(path)
+        }
+
+    # Check directories
+    directories = {
+        'flowgate_config': CONFIG_DIR,
+        'flowgate_data': DATA_DIR,
+        'flowgate_backups': BACKUP_DIR,
+        'nginx_streams': PATHS['nginx_stream'].parent,
+        'nginx_sites': PATHS['nginx_http'].parent,
+        'angie_stream': PATHS['angie_stream'].parent,
+        'angie_http': PATHS['angie_http'].parent,
+        'ssl_certs': Path('/etc/ssl/certs'),
+        'ssl_private': Path('/etc/ssl/private'),
+    }
+
+    for name, path in directories.items():
+        try:
+            exists = path.exists()
+        except PermissionError:
+            exists = None  # Unknown due to permissions
+        results['directories'][name] = {
+            'exists': exists,
+            'path': str(path)
+        }
+
+    # Generate recommendations
+    os_family = results['os'].get('family', 'unknown')
+
+    # No proxy installed
+    if not results['binaries']['nginx']['installed'] and not results['binaries']['angie']['installed']:
+        fix_cmd = get_install_command('nginx', os_family)
+        results['recommendations'].append({
+            'level': 'critical',
+            'message': 'No reverse proxy installed',
+            'fix': f"sudo {fix_cmd}" if fix_cmd and not fix_cmd.startswith('#') else (fix_cmd or 'Install nginx or angie')
+        })
+
+    # No DNS installed
+    if not results['binaries']['blocky']['installed'] and not results['binaries']['AdGuardHome']['installed']:
+        fix_cmd = get_install_command('blocky', os_family)
+        results['recommendations'].append({
+            'level': 'critical',
+            'message': 'No DNS server installed',
+            'fix': f"sudo {fix_cmd}" if fix_cmd and not fix_cmd.startswith('#') else 'Download blocky from https://github.com/0xERR0R/blocky/releases'
+        })
+
+    # Certbot for nginx
+    if results['binaries']['nginx']['installed'] and not results['binaries']['certbot']['installed']:
+        fix_cmd = get_install_command('certbot', os_family)
+        results['recommendations'].append({
+            'level': 'warning',
+            'message': 'Certbot not installed (needed for HTTPS certificates)',
+            'fix': f"sudo {fix_cmd}" if fix_cmd and not fix_cmd.startswith('#') else 'Install certbot'
+        })
+
+    # OpenSSL
+    if not results['binaries']['openssl']['installed']:
+        fix_cmd = get_install_command('openssl', os_family)
+        results['recommendations'].append({
+            'level': 'warning',
+            'message': 'OpenSSL not installed (needed for fallback certificates)',
+            'fix': f"sudo {fix_cmd}" if fix_cmd else 'Install openssl'
+        })
+
+    # Snakeoil certificate
+    snakeoil_cert = Path('/etc/ssl/certs/ssl-cert-snakeoil.pem')
+    snakeoil_key = Path('/etc/ssl/private/ssl-cert-snakeoil.key')
+    if not snakeoil_cert.exists() or not snakeoil_key.exists():
+        results['recommendations'].append({
+            'level': 'info',
+            'message': 'Snakeoil certificate not found (will be auto-generated on sync)',
+            'auto': True
+        })
+
+    # Proxy not running
+    if results['binaries']['nginx']['installed'] and not results['services']['nginx']:
+        if results['binaries']['angie']['installed'] and results['services']['angie']:
+            pass  # Angie is running, that's fine
+        else:
+            results['recommendations'].append({
+                'level': 'warning',
+                'message': 'Nginx is installed but not running',
+                'fix': get_service_reload_command('nginx').replace('reload', 'start')
+            })
+
+    if results['binaries']['angie']['installed'] and not results['services']['angie']:
+        if results['binaries']['nginx']['installed'] and results['services']['nginx']:
+            pass  # Nginx is running, that's fine
+        else:
+            results['recommendations'].append({
+                'level': 'warning',
+                'message': 'Angie is installed but not running',
+                'fix': get_service_reload_command('angie').replace('reload', 'start')
+            })
+
+    # DNS not running
+    if results['binaries']['blocky']['installed'] and not results['services']['blocky']:
+        if results['binaries']['AdGuardHome']['installed'] and results['services']['AdGuardHome']:
+            pass
+        else:
+            results['recommendations'].append({
+                'level': 'warning',
+                'message': 'Blocky is installed but not running',
+                'fix': get_service_reload_command('blocky').replace('reload', 'start')
+            })
+
+    return results
+
+def detect_os_info() -> Dict[str, str]:
+    """Detect OS information from /etc/os-release or uname."""
+    info = {
+        'id': 'unknown',
+        'id_like': '',
+        'name': 'Unknown',
+        'version': '',
+        'family': 'unknown'  # debian, rhel, arch, alpine, suse, freebsd, etc.
+    }
+
+    # Try /etc/os-release first (Linux)
+    try:
+        with open('/etc/os-release', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('ID='):
+                    info['id'] = line.split('=')[1].strip().strip('"')
+                elif line.startswith('ID_LIKE='):
+                    info['id_like'] = line.split('=')[1].strip().strip('"')
+                elif line.startswith('PRETTY_NAME='):
+                    info['name'] = line.split('=', 1)[1].strip().strip('"')
+                elif line.startswith('VERSION_ID='):
+                    info['version'] = line.split('=')[1].strip().strip('"')
+    except FileNotFoundError:
+        # Try uname for BSD systems
+        try:
+            result = subprocess.run(['uname', '-s'], capture_output=True, text=True)
+            if result.returncode == 0:
+                uname = result.stdout.strip().lower()
+                if 'freebsd' in uname:
+                    info['id'] = 'freebsd'
+                    info['name'] = 'FreeBSD'
+                elif 'openbsd' in uname:
+                    info['id'] = 'openbsd'
+                    info['name'] = 'OpenBSD'
+                elif 'netbsd' in uname:
+                    info['id'] = 'netbsd'
+                    info['name'] = 'NetBSD'
+                elif 'darwin' in uname:
+                    info['id'] = 'macos'
+                    info['name'] = 'macOS'
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Determine family
+    os_id = info['id'].lower()
+    id_like = info['id_like'].lower()
+
+    # Debian-based
+    if os_id in ('debian', 'ubuntu', 'linuxmint', 'pop', 'elementary', 'zorin',
+                 'kali', 'raspbian', 'armbian', 'mx', 'devuan', 'bunsenlabs',
+                 'parrot', 'pureos', 'tails', 'antiX', 'sparky', 'lmde'):
+        info['family'] = 'debian'
+    elif 'debian' in id_like or 'ubuntu' in id_like:
+        info['family'] = 'debian'
+    # RHEL-based
+    elif os_id in ('fedora', 'rhel', 'centos', 'rocky', 'almalinux', 'oracle',
+                   'amzn', 'amazon', 'scientific', 'eurolinux', 'navy', 'circle'):
+        info['family'] = 'rhel'
+    elif 'fedora' in id_like or 'rhel' in id_like or 'centos' in id_like:
+        info['family'] = 'rhel'
+    # Arch-based
+    elif os_id in ('arch', 'manjaro', 'endeavouros', 'garuda', 'artix',
+                   'arcolinux', 'archcraft', 'cachyos', 'crystal', 'reborn'):
+        info['family'] = 'arch'
+    elif 'arch' in id_like:
+        info['family'] = 'arch'
+    # Alpine
+    elif os_id in ('alpine', 'postmarketos'):
+        info['family'] = 'alpine'
+    # SUSE-based
+    elif os_id in ('opensuse-leap', 'opensuse-tumbleweed', 'sles', 'suse', 'opensuse'):
+        info['family'] = 'suse'
+    elif 'suse' in id_like or 'opensuse' in id_like:
+        info['family'] = 'suse'
+    # Gentoo-based
+    elif os_id in ('gentoo', 'funtoo', 'calculate'):
+        info['family'] = 'gentoo'
+    # Void Linux
+    elif os_id in ('void',):
+        info['family'] = 'void'
+    # NixOS
+    elif os_id in ('nixos',):
+        info['family'] = 'nix'
+    # BSD systems
+    elif os_id in ('freebsd',):
+        info['family'] = 'freebsd'
+    elif os_id in ('openbsd', 'netbsd'):
+        info['family'] = 'bsd'
+    # macOS
+    elif os_id in ('macos', 'darwin'):
+        info['family'] = 'macos'
+
+    return info
+
+# Package installation commands by OS family
+PACKAGE_COMMANDS = {
+    'debian': {
+        'update': 'apt update',
+        'install': 'apt install -y',
+        'packages': {
+            'nginx': 'nginx libnginx-mod-stream',
+            'angie': '# Add Angie repo: https://angie.software/installation/',
+            'certbot': 'certbot python3-certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': 'blocky',  # Available in Debian 13+
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'python3',
+        }
+    },
+    'rhel': {
+        'update': 'dnf check-update || true',
+        'install': 'dnf install -y',
+        'packages': {
+            'nginx': 'nginx nginx-mod-stream',
+            'angie': '# Add Angie repo: https://angie.software/installation/',
+            'certbot': 'certbot python3-certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'python3',
+        }
+    },
+    'arch': {
+        'update': 'pacman -Sy',
+        'install': 'pacman -S --noconfirm',
+        'packages': {
+            'nginx': 'nginx',
+            'angie': '# AUR: yay -S angie',
+            'certbot': 'certbot certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# AUR: yay -S blocky-bin',
+            'adguardhome': '# AUR: yay -S adguardhome-bin',
+            'python3': 'python',
+        }
+    },
+    'alpine': {
+        'update': 'apk update',
+        'install': 'apk add',
+        'packages': {
+            'nginx': 'nginx nginx-mod-stream',
+            'angie': '# Add Angie repo: https://angie.software/installation/',
+            'certbot': 'certbot certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': 'adguardhome',  # Available in Alpine edge/testing
+            'python3': 'python3',
+        }
+    },
+    'suse': {
+        'update': 'zypper refresh',
+        'install': 'zypper install -y',
+        'packages': {
+            'nginx': 'nginx',
+            'angie': '# Add Angie repo: https://angie.software/installation/',
+            'certbot': 'python3-certbot python3-certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'python3',
+        }
+    },
+    'gentoo': {
+        'update': 'emerge --sync',
+        'install': 'emerge',
+        'packages': {
+            'nginx': 'www-servers/nginx',
+            'angie': '# Build from source: https://angie.software/',
+            'certbot': 'app-crypt/certbot',
+            'openssl': 'dev-libs/openssl',
+            'curl': 'net-misc/curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'dev-lang/python',
+        }
+    },
+    'void': {
+        'update': 'xbps-install -S',
+        'install': 'xbps-install -y',
+        'packages': {
+            'nginx': 'nginx',
+            'angie': '# Build from source: https://angie.software/',
+            'certbot': 'certbot certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'python3',
+        }
+    },
+    'freebsd': {
+        'update': 'pkg update',
+        'install': 'pkg install -y',
+        'packages': {
+            'nginx': 'nginx',
+            'angie': '# Build from source: https://angie.software/',
+            'certbot': 'py39-certbot py39-certbot-nginx',
+            'openssl': 'openssl',
+            'curl': 'curl',
+            'blocky': '# Download from https://github.com/0xERR0R/blocky/releases',
+            'adguardhome': '# Download from https://github.com/AdguardTeam/AdGuardHome/releases',
+            'python3': 'python3',
+        }
+    },
+}
+
+def get_install_command(component: str, os_family: str = None) -> Optional[str]:
+    """Get installation command for a component based on OS family."""
+    if not os_family:
+        os_info = detect_os_info()
+        os_family = os_info['family']
+
+    if os_family not in PACKAGE_COMMANDS:
+        return None
+
+    pkg_info = PACKAGE_COMMANDS[os_family]
+    if component not in pkg_info['packages']:
+        return None
+
+    pkg = pkg_info['packages'][component]
+    if pkg.startswith('#'):
+        return pkg  # It's a comment/manual instruction
+
+    return f"{pkg_info['install']} {pkg}"
+
+def get_quick_install_command(os_family: str = None) -> str:
+    """Get a quick one-liner to install all required components."""
+    if not os_family:
+        os_info = detect_os_info()
+        os_family = os_info['family']
+
+    if os_family == 'debian':
+        return "sudo apt update && sudo apt install -y nginx libnginx-mod-stream certbot python3-certbot-nginx openssl"
+    elif os_family == 'rhel':
+        return "sudo dnf install -y nginx nginx-mod-stream certbot python3-certbot-nginx openssl"
+    elif os_family == 'arch':
+        return "sudo pacman -S --noconfirm nginx certbot certbot-nginx openssl"
+    elif os_family == 'alpine':
+        return "apk add nginx nginx-mod-stream certbot certbot-nginx openssl"
+    elif os_family == 'suse':
+        return "sudo zypper install -y nginx python3-certbot python3-certbot-nginx openssl"
+    elif os_family == 'void':
+        return "sudo xbps-install -y nginx certbot certbot-nginx openssl"
+    else:
+        return "# Install nginx and certbot using your package manager"
+
+
+def get_missing_install_command(os_family: str, missing_components: list) -> Optional[str]:
+    """Get installation command only for missing components."""
+    if not missing_components:
+        return None
+
+    if os_family not in PACKAGE_COMMANDS:
+        return None
+
+    pkg_info = PACKAGE_COMMANDS[os_family]
+    packages = []
+    manual_instructions = []
+
+    for component in missing_components:
+        if component in pkg_info['packages']:
+            pkg = pkg_info['packages'][component]
+            if pkg.startswith('#'):
+                manual_instructions.append(f"{component}: {pkg}")
+            else:
+                packages.append(pkg)
+
+    if not packages and not manual_instructions:
+        return None
+
+    result_parts = []
+
+    if packages:
+        pkg_str = ' '.join(packages)
+        if os_family == 'debian':
+            result_parts.append(f"sudo apt update && sudo apt install -y {pkg_str}")
+        elif os_family == 'rhel':
+            result_parts.append(f"sudo dnf install -y {pkg_str}")
+        elif os_family == 'arch':
+            result_parts.append(f"sudo pacman -S --noconfirm {pkg_str}")
+        elif os_family == 'alpine':
+            result_parts.append(f"apk add {pkg_str}")
+        elif os_family == 'suse':
+            result_parts.append(f"sudo zypper install -y {pkg_str}")
+        elif os_family == 'void':
+            result_parts.append(f"sudo xbps-install -y {pkg_str}")
+        elif os_family == 'freebsd':
+            result_parts.append(f"sudo pkg install -y {pkg_str}")
+        else:
+            result_parts.append(f"# Install: {pkg_str}")
+
+    for instruction in manual_instructions:
+        result_parts.append(instruction)
+
+    return '\n  '.join(result_parts)
+
 # --- Sync Implementations ---
 
 def sync_blocky(config: Dict[str, Any], active_proxy: str):
     Console.info("Syncing Blocky...")
+
+    # Ensure config exists
+    if not ensure_blocky_config():
+        return
     try:
         proxy_ip = config['settings'].get('proxy_ip')
         if not proxy_ip or proxy_ip == '0.0.0.0':
@@ -393,9 +1342,14 @@ def sync_blocky(config: Dict[str, Any], active_proxy: str):
 
 def sync_adguard(config: Dict[str, Any], active_proxy: str):
     Console.info("Syncing AdGuardHome...")
+
+    # Ensure config exists
+    if not ensure_adguard_config():
+        return
+
     try:
         with open(PATHS['adguard'], 'r') as f:
-            agh_cfg = yaml.safe_load(f)
+            agh_cfg = yaml.safe_load(f) or {}
 
         # Ensure structure
         agh_cfg.setdefault('filtering', {}).setdefault('rewrites', [])
@@ -444,7 +1398,10 @@ def sync_adguard(config: Dict[str, Any], active_proxy: str):
 
 def sync_angie(config: Dict[str, Any]):
     Console.info("Syncing Angie...")
-    if not PATHS['angie_stream'].parent.exists(): return
+
+    # Ensure config exists
+    if not ensure_angie_config():
+        return
 
     try:
         # 1. Stream Config (Layer 4)
@@ -577,7 +1534,9 @@ server {{
         with open(PATHS['angie_http'], 'w') as f:
             f.write(http_conf)
 
-        run_cmd(['angie', '-t']) # Test config
+        # Test config only if angie binary exists
+        if shutil.which('angie'):
+            run_cmd(['angie', '-t'])
         run_cmd(['systemctl', 'reload', 'angie'])
         Console.success("Angie reloaded with separate ACME certificates per domain")
 
@@ -587,14 +1546,9 @@ server {{
 def sync_nginx(config: Dict[str, Any]):
     Console.info("Syncing Nginx...")
 
-    # Ensure directories exist (if we have permission)
-    if not PATHS['nginx_stream'].parent.exists():
-        try:
-            PATHS['nginx_stream'].parent.mkdir(parents=True, exist_ok=True)
-        except PermissionError:
-            Console.warn(f"Cannot create {PATHS['nginx_stream'].parent}. Stream config might fail.")
-
-    check_nginx_stream_inclusion()
+    # Ensure config exists
+    if not ensure_nginx_config():
+        return
 
     try:
         # 1. Stream Config (Layer 4)
@@ -639,7 +1593,9 @@ server {
         with open(PATHS['nginx_http'], 'w') as f:
             f.write(acme_conf)
 
-        run_cmd(['systemctl', 'reload', 'nginx'])
+        # Reload nginx only if binary exists
+        if shutil.which('nginx'):
+            run_cmd(['systemctl', 'reload', 'nginx'])
 
         for domain in service_domains:
             data = config['domains'][domain]
@@ -651,31 +1607,38 @@ server {
             key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
 
             if not cert_path.exists():
-                Console.info(f"Issuing certificate for {domain}...")
-                # Nginx is already routing /.well-known/acme-challenge/ to 9180
-                cmd = [
-                    'certbot', 'certonly', '--standalone',
-                    '--http-01-port', '9180',
-                    '-d', domain,
-                    '--deploy-hook', 'systemctl reload nginx',
-                    '--non-interactive', '--agree-tos', '--register-unsafely-without-email'
-                ]
-                res = run_cmd(cmd)
-                if res.returncode == 0:
-                    Console.success(f"Certificate issued for {domain}")
+                # Only try certbot if it's available
+                if shutil.which('certbot'):
+                    Console.info(f"Issuing certificate for {domain}...")
+                    # Build reload hook based on init system
+                    reload_hook = get_service_reload_command('nginx')
+                    # Nginx is already routing /.well-known/acme-challenge/ to 9180
+                    cmd = [
+                        'certbot', 'certonly', '--standalone',
+                        '--http-01-port', '9180',
+                        '-d', domain,
+                        '--deploy-hook', reload_hook,
+                        '--non-interactive', '--agree-tos', '--register-unsafely-without-email'
+                    ]
+                    res = run_cmd(cmd, check=False)
+                    if res.returncode == 0:
+                        Console.success(f"Certificate issued for {domain}")
+                    else:
+                        Console.error(f"Failed to issue certificate for {domain}: {res.stderr}")
                 else:
-                    Console.error(f"Failed to issue certificate for {domain}: {res.stderr}")
+                    Console.warn(f"Certbot not found. Skipping certificate issuance for {domain}")
 
             # Ensure renewal hook is set for existing certs
             renewal_conf = Path(f"/etc/letsencrypt/renewal/{domain}.conf")
             if renewal_conf.exists():
                 try:
                     content = renewal_conf.read_text()
-                    if "systemctl reload nginx" not in content:
+                    reload_hook = get_service_reload_command('nginx')
+                    if reload_hook not in content:
                         Console.info(f"Adding renewal hook for {domain}...")
                         # Append hook to renewal params
                         with open(renewal_conf, "a") as f:
-                            f.write("\nrenew_hook = systemctl reload nginx\n")
+                            f.write(f"\nrenew_hook = {reload_hook}\n")
                 except Exception as e:
                     Console.warn(f"Failed to update renewal hook for {domain}: {e}")
 
@@ -707,7 +1670,9 @@ server {{
         with open(PATHS['nginx_http'], 'w') as f:
             f.write(http_conf + acme_conf)
 
-        run_cmd(['systemctl', 'reload', 'nginx'])
+        # Reload nginx only if binary exists
+        if shutil.which('nginx'):
+            run_cmd(['systemctl', 'reload', 'nginx'])
         Console.success("Nginx reloaded")
 
     except Exception as e:
@@ -725,6 +1690,9 @@ def cmd_sync(args):
         Console.info("  Debian/Ubuntu: apt install flowgate-full")
         Console.info("  Manual: make install-all")
         return
+
+    # Ensure all configs and certificates exist
+    ensure_configs_for_stack(proxy, dns)
 
     backup_configs()
     config = load_config()
@@ -819,6 +1787,193 @@ def cmd_remove(args):
         save_config(config)
         cmd_sync(args)
 
+def cmd_doctor(args):
+    """Run diagnostics and show recommendations."""
+    Console.header("Flowgate System Diagnostics")
+
+    results = check_requirements()
+
+    # OS Info
+    print(f"\n{Style.BOLD}System:{Style.RESET}")
+    print(f"  OS:          {results['os'].get('name', 'Unknown')}")
+    print(f"  Init System: {results['os'].get('init', 'Unknown')}")
+
+    # Binaries
+    print(f"\n{Style.BOLD}Components:{Style.RESET}")
+
+    def show_binary(name, info, category):
+        if info['installed']:
+            status = f"{Style.GREEN}✔ installed{Style.RESET}"
+            path_info = f" ({info['path']})" if args.verbose else ""
+        else:
+            status = f"{Style.RED}✖ not found{Style.RESET}"
+            path_info = ""
+        print(f"  {name:<15} {status}{path_info}")
+
+    # Proxies
+    print(f"  {Style.DIM}── Proxy ──{Style.RESET}")
+    show_binary('Nginx', results['binaries']['nginx'], 'proxy')
+    show_binary('Angie', results['binaries']['angie'], 'proxy')
+
+    # DNS
+    print(f"  {Style.DIM}── DNS ──{Style.RESET}")
+    show_binary('Blocky', results['binaries']['blocky'], 'dns')
+    show_binary('AdGuardHome', results['binaries']['AdGuardHome'], 'dns')
+
+    # Tools
+    print(f"  {Style.DIM}── Tools ──{Style.RESET}")
+    show_binary('Certbot', results['binaries']['certbot'], 'tools')
+    show_binary('OpenSSL', results['binaries']['openssl'], 'tools')
+
+    # Services
+    print(f"\n{Style.BOLD}Services:{Style.RESET}")
+    for svc, active in results['services'].items():
+        if active:
+            status = f"{Style.GREEN}● running{Style.RESET}"
+        else:
+            # Check if binary exists
+            bin_name = svc if svc != 'flowgate-web' else 'uvicorn'
+            if svc == 'AdGuardHome':
+                bin_exists = results['binaries']['AdGuardHome']['installed']
+            elif svc in results['binaries']:
+                bin_exists = results['binaries'][svc]['installed']
+            else:
+                bin_exists = False
+
+            if bin_exists:
+                status = f"{Style.YELLOW}○ stopped{Style.RESET}"
+            else:
+                status = f"{Style.DIM}○ not installed{Style.RESET}"
+        print(f"  {svc:<15} {status}")
+
+    # Configs
+    if args.verbose:
+        print(f"\n{Style.BOLD}Configuration Files:{Style.RESET}")
+        for name, info in results['configs'].items():
+            if info['exists']:
+                status = f"{Style.GREEN}✔{Style.RESET}"
+            else:
+                status = f"{Style.DIM}○{Style.RESET}"
+            print(f"  {status} {info['path']}")
+
+    # Recommendations
+    if results['recommendations']:
+        print(f"\n{Style.BOLD}Recommendations:{Style.RESET}")
+        for rec in results['recommendations']:
+            level = rec['level']
+            if level == 'critical':
+                icon = f"{Style.RED}✖{Style.RESET}"
+            elif level == 'warning':
+                icon = f"{Style.YELLOW}⚠{Style.RESET}"
+            else:
+                icon = f"{Style.BLUE}ℹ{Style.RESET}"
+
+            print(f"  {icon} {rec['message']}")
+            if 'fix' in rec:
+                print(f"    {Style.DIM}→ {rec['fix']}{Style.RESET}")
+            if rec.get('auto'):
+                print(f"    {Style.DIM}(will be auto-fixed on next sync){Style.RESET}")
+    else:
+        print(f"\n{Style.GREEN}✔ All checks passed!{Style.RESET}")
+
+    # Quick fix suggestion - only for missing components
+    critical_count = len([r for r in results['recommendations'] if r['level'] == 'critical'])
+    warning_count = len([r for r in results['recommendations'] if r['level'] == 'warning'])
+    if critical_count > 0 or warning_count > 0:
+        # Determine which components are missing
+        missing = []
+        if not results['binaries']['nginx']['installed'] and not results['binaries']['angie']['installed']:
+            missing.append('nginx')
+        if not results['binaries']['blocky']['installed'] and not results['binaries']['AdGuardHome']['installed']:
+            missing.append('blocky')
+        if not results['binaries']['certbot']['installed']:
+            missing.append('certbot')
+        if not results['binaries']['openssl']['installed']:
+            missing.append('openssl')
+
+        if missing:
+            print(f"\n{Style.BOLD}Quick Setup:{Style.RESET}")
+            os_family = results['os'].get('family', 'debian')
+            quick_cmd = get_missing_install_command(os_family, missing)
+            if quick_cmd:
+                for line in quick_cmd.split('\n'):
+                    print(f"  {Style.CYAN}{line}{Style.RESET}")
+            else:
+                print(f"  {Style.DIM}Install missing components for your distribution{Style.RESET}")
+            print()
+
+def cmd_init(args):
+    """Initialize Flowgate environment - create all directories and configs."""
+    Console.header("Initializing Flowgate Environment")
+
+    # 1. Create base directories
+    directories = [
+        (CONFIG_DIR, 0o755, "Configuration directory"),
+        (DATA_DIR, 0o750, "Data directory"),
+        (BACKUP_DIR, 0o750, "Backup directory"),
+    ]
+
+    for path, mode, desc in directories:
+        if not path.exists():
+            try:
+                path.mkdir(parents=True, mode=mode)
+                Console.success(f"Created {desc}: {path}")
+            except PermissionError:
+                Console.error(f"Cannot create {path}. Run as root.")
+                return
+        else:
+            Console.info(f"{desc} exists: {path}")
+
+    # 2. Detect and prepare stack
+    proxy, dns = detect_stack()
+
+    # If no stack detected, try to detect by binary
+    if proxy == 'none':
+        if shutil.which('angie'):
+            proxy = 'angie'
+        elif shutil.which('nginx'):
+            proxy = 'nginx'
+
+    if dns == 'none':
+        if shutil.which('blocky'):
+            dns = 'blocky'
+        elif shutil.which('AdGuardHome'):
+            dns = 'adguard'
+
+    Console.info(f"Detected stack: Proxy={proxy.upper()}, DNS={dns.upper()}")
+
+    # 3. Prepare configs for detected stack
+    if proxy != 'none' or dns != 'none':
+        Console.info("Preparing configurations...")
+        ensure_configs_for_stack(proxy, dns)
+    else:
+        Console.warn("No proxy or DNS server detected.")
+        Console.info("Install components first:")
+
+        # Detect OS and suggest commands
+        os_info = detect_os_info()
+        os_family = os_info.get('family', 'debian')
+        quick_cmd = get_quick_install_command(os_family)
+        if quick_cmd:
+            Console.info(f"  {quick_cmd}")
+        else:
+            Console.info("  Install nginx/angie and blocky/adguardhome for your distribution")
+
+    # 4. Create initial flowgate config if missing
+    if not CONFIG_FILE.exists():
+        load_config()  # This creates initial config
+
+    # 5. Show next steps
+    Console.header("Initialization Complete")
+    print(f"""
+Next steps:
+  1. Add domains:      flowgate add example.com another.com
+  2. Add services:     flowgate service myapp.local 8080
+  3. Set DNS domain:   flowgate dns doh.example.com
+  4. Check status:     flowgate status
+  5. Run diagnostics:  flowgate doctor
+""")
+
 def cmd_status(args):
     Console.header("Service Status")
 
@@ -827,7 +1982,7 @@ def cmd_status(args):
     s_angie = is_active('angie')
     s_blocky = is_active('blocky')
     s_adguard = is_active('AdGuardHome')
-    s_flowweb = is_active('flowweb')
+    s_flowgate_web = is_active('flowgate-web')
     s_certbot = is_active('certbot.timer')
 
     # DNS redundancy check: Critical if BOTH are down
@@ -846,18 +2001,19 @@ def cmd_status(args):
     print_svc('Angie', s_angie, critical=proxy_down)
     print_svc('Blocky', s_blocky, critical=dns_down)
     print_svc('AdGuardHome', s_adguard, critical=dns_down)
-    print_svc('FlowWeb', s_flowweb, critical=False) # Web UI is optional
+    print_svc('Flowgate Web', s_flowgate_web, critical=False) # Web UI is optional
     print_svc('Certbot Timer', s_certbot, critical=s_nginx) # Certbot only needed for Nginx
 
     config = load_config()
     domains = config.get('domains', {})
 
+    # Show installation hints if components missing
+    if proxy_down and dns_down:
+        Console.warn("No services running. Run 'flowgate doctor' for setup help.")
+
     if not domains:
         Console.info("No domains configured.")
-        if proxy_down and dns_down:
-             Console.info("\nTo get started, install components:")
-             Console.info("  Debian/Ubuntu: apt install flowgate-full")
-             Console.info("  Manual: make install-all")
+        Console.info("Use 'flowgate add example.com' to add a domain.")
         return
 
     Console.header(f"Configured Domains ({len(domains)})")
@@ -889,10 +2045,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s add example.com
-  %(prog)s service my-app.com 8080
-  %(prog)s dns doh.my-domain.com
-  %(prog)s status
+  %(prog)s init                    # Initialize environment
+  %(prog)s doctor                  # Check system requirements
+  %(prog)s add example.com         # Add passthrough domain
+  %(prog)s service my-app.com 8080 # Add local service
+  %(prog)s dns doh.my-domain.com   # Set DNS domain
+  %(prog)s status                  # Show current status
+  %(prog)s sync                    # Apply configuration
         """
     )
 
@@ -928,6 +2087,15 @@ Examples:
     # Sync
     p_sync = subparsers.add_parser('sync', help='Force configuration sync')
     p_sync.set_defaults(func=cmd_sync)
+
+    # Doctor
+    p_doctor = subparsers.add_parser('doctor', help='Run diagnostics and show recommendations')
+    p_doctor.add_argument('-v', '--verbose', action='store_true', help='Show detailed information')
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # Init
+    p_init = subparsers.add_parser('init', help='Initialize Flowgate environment')
+    p_init.set_defaults(func=cmd_init)
 
     args = parser.parse_args()
     if hasattr(args, 'func'):
