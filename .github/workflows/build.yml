@@ -19,9 +19,12 @@ jobs:
       - name: Get version from changelog
         id: get_version
         run: |
-          VERSION=$(dpkg-parsechangelog --show-field Version)
+          FULL_VERSION=$(dpkg-parsechangelog --show-field Version)
+          # Extract upstream version (without Debian revision suffix)
+          VERSION=$(echo "$FULL_VERSION" | sed 's/-[0-9]*$//')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
+          echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION (full: $FULL_VERSION)"
 
       - name: Install build dependencies
         run: |
