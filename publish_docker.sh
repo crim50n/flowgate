@@ -17,11 +17,11 @@ echo "Login to Docker Hub if you haven't already (docker login)"
 for VARIANT in "${VARIANTS[@]}"; do
   TAG="$USERNAME/$REPO:$VARIANT"
   DOCKERFILE="Dockerfile.$VARIANT"
-  
+
   echo "------------------------------------------------"
   echo "Building $TAG using $DOCKERFILE..."
   docker build -t "$TAG" -f "$DOCKERFILE" .
-  
+
   echo "Pushing $TAG..."
   docker push "$TAG"
 done

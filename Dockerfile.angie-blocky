@@ -1,9 +1,13 @@
-# Stage 1: Final Image
-FROM alpine:3.20
+# Flowgate: Angie + Blocky
+FROM alpine:3.21
+
+LABEL maintainer="Flowgate Team" \
+      description="Flowgate with Angie reverse proxy and Blocky DNS" \
+      org.opencontainers.image.source="https://github.com/flowgate/flowgate"
 
 # Install dependencies and Angie
-RUN echo "https://download.angie.software/angie/alpine/v3.20/main" >> /etc/apk/repositories && \
-    apk add --no-cache --allow-untrusted angie angie-module-image-filter angie-module-xslt \
+RUN echo "https://download.angie.software/angie/alpine/v3.21/main" >> /etc/apk/repositories && \
+    apk add --no-cache --allow-untrusted angie \
     python3 \
     py3-pip \
     py3-yaml \
@@ -12,18 +16,14 @@ RUN echo "https://download.angie.software/angie/alpine/v3.20/main" >> /etc/apk/r
     ca-certificates \
     openssl \
     tzdata \
-    gcc \
-    python3-dev \
-    libffi-dev \
     libcap \
-    sudo \
-    musl-dev
+    sudo
 
 # Create users
 RUN addgroup -S flowgate && adduser -S -D -H -h /var/lib/flowgate -s /sbin/nologin -G flowgate flowgate && \
     addgroup -S blocky && adduser -S -D -H -h /var/lib/blocky -s /sbin/nologin -G blocky blocky
 
-# Python packages for FlowWeb
+# Python packages for Flowgate Web
 RUN pip3 install --no-cache-dir --break-system-packages \
     fastapi \
     uvicorn \
@@ -69,7 +69,7 @@ RUN chmod 440 /etc/sudoers.d/flowgate
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy FlowWeb
+# Copy Flowgate Web
 COPY web /usr/share/flowgate
 
 # Set ownership
@@ -79,12 +79,17 @@ RUN chown -R flowgate:flowgate /etc/flowgate /var/lib/flowgate /usr/share/flowga
 # Expose Ports
 # 80/443 - HTTP/HTTPS (Angie)
 # 853 - DNS over TLS (Blocky)
-EXPOSE 80/tcp 443/tcp 853/tcp
+# 5000 - Flowgate Web UI
+EXPOSE 80/tcp 443/tcp 853/tcp 5000/tcp
 
 # Environment Variables
 ENV PROXY_IP="auto"
 ENV DNS_DOMAIN=""
 ENV DNS_UPSTREAM="https://8.8.8.8/dns-query,https://1.1.1.1/dns-query"
 ENV ENABLE_WEB_UI="false"
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf http://127.0.0.1:80/ || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
