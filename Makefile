@@ -78,8 +78,8 @@ install-web: install-flowgate
 
 	# Install files
 	install -m 644 web/main.py $(DESTDIR)$(WEBDIR)/main.py
-	install -m 644 web/static/* $(DESTDIR)$(WEBDIR)/static/
-	install -m 644 web/templates/* $(DESTDIR)$(WEBDIR)/templates/
+	for f in web/static/*; do install -m 644 "$$f" $(DESTDIR)$(WEBDIR)/static/; done
+	for f in web/templates/*; do install -m 644 "$$f" $(DESTDIR)$(WEBDIR)/templates/; done
 
 	# Install service
 ifeq ($(INIT_SYSTEM),systemd)
