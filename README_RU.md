@@ -11,6 +11,8 @@ Flowgate — это современный инструмент командно
 *   **Обнаружение локальных сервисов:** Легко публикуйте локальные приложения через обратный прокси с автоматическим созданием DNS-записей.
 *   **Веб-панель:** Удобный веб-интерфейс для управления доменами и сервисами.
 *   **Автоматический SSL:** Автоматическое управление сертификатами через Certbot (для Nginx) или нативный ACME (для Angie).
+*   **Поддержка 30+ дистрибутивов:** Работает на Debian, Ubuntu, Fedora, Arch, Alpine, openSUSE, Gentoo, Void и многих других.
+*   **Универсальная init-система:** Поддержка systemd, OpenRC, SysVinit, runit и s6.
 *   **Гибкая архитектура:** Поддержка нескольких бэкендов:
     *   **Прокси:** Nginx или Angie
     *   **DNS:** Blocky или AdGuardHome
@@ -45,7 +47,7 @@ Flowgate доступен на Docker Hub как `crims0n/flowgate`. Он под
 **Запуск (По умолчанию - Angie + Blocky):**
 ```bash
 docker run -d --name flowgate \
-  -p 80:80 -p 443:443 -p 53:53/udp \
+  -p 80:80 -p 443:443 -p 853:853 \
   -p 5000:5000 \
   -v flowgate_config:/etc/flowgate \
   -v angie_state:/var/lib/angie \
@@ -57,7 +59,7 @@ docker run -d --name flowgate \
 **Запуск (Вариант с AdGuardHome):**
 ```bash
 docker run -d --name flowgate \
-  -p 80:80 -p 443:443 -p 53:53/udp \
+  -p 80:80 -p 443:443 -p 853:853 \
   -p 5000:5000 -p 3000:3000 \
   -v flowgate_config:/etc/flowgate \
   -v angie_state:/var/lib/angie \
@@ -70,7 +72,7 @@ docker run -d --name flowgate \
 **Запуск (Nginx + Blocky):**
 ```bash
 docker run -d --name flowgate \
-  -p 80:80 -p 443:443 -p 53:53/udp \
+  -p 80:80 -p 443:443 -p 853:853 \
   -p 5000:5000 \
   -v flowgate_config:/etc/flowgate \
   -v letsencrypt_certs:/etc/letsencrypt \
@@ -82,7 +84,7 @@ docker run -d --name flowgate \
 **Запуск (Nginx + AdGuardHome):**
 ```bash
 docker run -d --name flowgate \
-  -p 80:80 -p 443:443 -p 53:53/udp \
+  -p 80:80 -p 443:443 -p 853:853 \
   -p 5000:5000 -p 3000:3000 \
   -v flowgate_config:/etc/flowgate \
   -v letsencrypt_certs:/etc/letsencrypt \
@@ -92,12 +94,15 @@ docker run -d --name flowgate \
   crims0n/flowgate:nginx-adguardhome
 ```
 
+> **Примечание:** Если вам нужен внешний доступ к DNS, добавьте `-p 53:53/udp` к команде запуска.
+
 **Детали конфигурации:**
 
 *   **Порты:**
-    *   `53/udp`: DNS-сервис (Обязательно).
+    *   `53/udp`: DNS-сервис (Опционально, для внешнего доступа к DNS).
     *   `80/tcp`: HTTP (Обязательно для ACME-проверок и редиректов).
     *   `443/tcp`: HTTPS (Обязательно для SNI-прокси и обратного прокси).
+    *   `853/tcp`: DNS over TLS (Опционально, для DoT).
     *   `5000/tcp`: Веб-панель Flowgate.
     *   `3000/tcp`: Веб-панель AdGuardHome (только для вариантов с AGH).
 
@@ -160,6 +165,26 @@ sudo flowgate remove example.com
 **Принудительная синхронизация конфигурации:**
 ```bash
 sudo flowgate sync
+```
+
+**Управление сервисами:**
+```bash
+# Запустить/остановить/перезапустить все сервисы
+sudo flowgate start
+sudo flowgate stop
+sudo flowgate restart
+```
+
+**Диагностика системы:**
+```bash
+# Проверить состояние системы и получить инструкции по установке
+sudo flowgate doctor
+```
+
+**Первоначальная настройка:**
+```bash
+# Создать начальную конфигурацию
+sudo flowgate init
 ```
 
 ### Веб-интерфейс
