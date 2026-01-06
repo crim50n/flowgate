@@ -11,7 +11,7 @@ case "$1" in
         # Create log directory
         install -d -m 750 -o flowgate -g flowgate /var/log/flowgate
 
-        echo "Access FlowWeb at: http://127.0.0.1:5000"
+        echo "Access Flowgate Web at: http://127.0.0.1:5000"
         echo "Check logs for initial admin credentials!"
         echo ""
         ;;

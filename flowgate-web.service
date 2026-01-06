@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowWeb Dashboard for Flowgate
+Description=Flowgate Web Dashboard
 Documentation=https://github.com/crims0n/flowgate
 After=network.target flowgate.service
 Requires=flowgate.service

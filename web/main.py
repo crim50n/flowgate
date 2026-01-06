@@ -73,7 +73,7 @@ def get_auth_data():
         # Log generated password to stderr (visible in logs)
         import sys
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"[SECURITY] FlowWeb initial credentials generated:", file=sys.stderr)
+        print(f"[SECURITY] Flowgate Web initial credentials generated:", file=sys.stderr)
         print(f"  Username: admin", file=sys.stderr)
         print(f"  Password: {generated_password}", file=sys.stderr)
         print(f"  CHANGE THIS PASSWORD IMMEDIATELY!", file=sys.stderr)
