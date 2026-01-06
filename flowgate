@@ -829,6 +829,42 @@ def ensure_configs_for_stack(proxy: str, dns: str) -> bool:
 
 # --- System Requirements Check ---
 
+def check_nginx_stream_module() -> bool:
+    """Check if nginx stream module is available."""
+    # Check if nginx has stream module compiled in or loaded
+    nginx_path = shutil.which('nginx')
+    if not nginx_path:
+        return False
+
+    # Check compiled modules
+    try:
+        result = subprocess.run([nginx_path, '-V'], capture_output=True, text=True)
+        output = result.stderr + result.stdout
+        if '--with-stream' in output:
+            return True
+    except Exception:
+        pass
+
+    # Check if module file exists (Debian/Ubuntu)
+    stream_module_paths = [
+        Path('/usr/lib/nginx/modules/ngx_stream_module.so'),
+        Path('/usr/lib64/nginx/modules/ngx_stream_module.so'),
+        Path('/usr/share/nginx/modules/ngx_stream_module.so'),
+    ]
+    for path in stream_module_paths:
+        if path.exists():
+            return True
+
+    # Check if module package is installed (Debian)
+    try:
+        result = subprocess.run(['dpkg', '-l', 'libnginx-mod-stream'], capture_output=True, text=True)
+        if result.returncode == 0 and 'ii' in result.stdout:
+            return True
+    except Exception:
+        pass
+
+    return False
+
 def check_requirements() -> Dict[str, Any]:
     """Check system requirements and return diagnostic info."""
     results = {
@@ -921,6 +957,22 @@ def check_requirements() -> Dict[str, Any]:
             'level': 'critical',
             'message': 'No reverse proxy installed',
             'fix': f"sudo {fix_cmd}" if fix_cmd and not fix_cmd.startswith('#') else (fix_cmd or 'Install nginx or angie')
+        })
+
+    # Nginx stream module check
+    if results['binaries']['nginx']['installed'] and not check_nginx_stream_module():
+        if os_family == 'debian':
+            fix_cmd = 'sudo apt install -y libnginx-mod-stream'
+        elif os_family == 'rhel':
+            fix_cmd = 'sudo dnf install -y nginx-mod-stream'
+        elif os_family == 'alpine':
+            fix_cmd = 'apk add nginx-mod-stream'
+        else:
+            fix_cmd = 'Install nginx stream module'
+        results['recommendations'].append({
+            'level': 'critical',
+            'message': 'Nginx stream module not installed (required for SNI proxy)',
+            'fix': fix_cmd
         })
 
     # No DNS installed
