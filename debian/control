@@ -9,7 +9,7 @@ Homepage: https://github.com/crims0n/flowgate
 Package: flowgate
 Architecture: all
 Pre-Depends: init-system-helpers (>= 1.54~)
-Depends: ${misc:Depends}, python3, python3-yaml, curl, blocky | adguardhome, angie | nginx, angie | certbot, angie | python3-certbot-nginx
+Depends: ${misc:Depends}, python3, python3-yaml, curl, blocky | adguardhome, angie | nginx, angie | libnginx-mod-stream, angie | certbot, angie | python3-certbot-nginx
 Description: Network Flow Controller (DNS & Proxy Manager)
  Modern CLI tool for managing network flow infrastructure (DNS & Proxy).
  Supports Nginx/Angie (Layer 4 & 7) and Blocky/AdGuardHome (DNS).

@@ -1,15 +1,23 @@
 flowgate (1.1.0-1) unstable; urgency=medium
 
   * Expand OS detection to support 30+ Linux distributions.
-  * Add OS family mapping (debian, rhel, arch, alpine, suse, gentoo, void, freebsd).
+  * Add OS family mapping (debian, rhel, arch, alpine, suse, gentoo, void,
+    freebsd).
   * Show install commands only for missing packages in doctor output.
   * Add universal init system support (systemd, openrc, sysvinit, runit, s6).
   * Auto-detect nginx user (www-data, nginx, http, wwwrun) for config files.
   * Rename FlowWeb to Flowgate Web consistently.
   * Fix Makefile install-web target for file installation.
   * Update .gitignore to exclude Debian build artifacts.
+  * Add nginx stream module check in doctor command.
+  * Add libnginx-mod-stream as dependency for nginx installations.
+  * Fix doctor to not require certbot when angie is installed.
+  * Improve init command output with clear step descriptions.
+  * Auto-run sync after init to apply base configuration.
+  * Auto-disable default nginx site during sync to avoid conflicts.
+  * Fix ACME challenge routing with default_server directive.
 
- -- crims0n <crims0n@minios.dev>  Mon, 06 Jan 2026 17:15:06 +0300
+ -- crims0n <crims0n@minios.dev>  Tue, 06 Jan 2026 23:15:06 +0300
 
 flowgate (1.0.1-1) unstable; urgency=medium
 

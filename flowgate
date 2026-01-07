@@ -697,6 +697,33 @@ stream {
         except PermissionError:
             Console.warn("Cannot modify nginx.conf. Add stream block manually.")
 
+    # Disable default site to avoid conflicts with flowgate
+    default_site = Path("/etc/nginx/sites-enabled/default")
+    if default_site.exists() or default_site.is_symlink():
+        try:
+            default_site.unlink()
+            Console.info("Removed default nginx site symlink")
+            # Create README explaining what happened
+            readme = Path("/etc/nginx/README.flowgate")
+            if not readme.exists():
+                readme.write_text("""# Flowgate Nginx Configuration
+
+Flowgate manages nginx configuration automatically.
+
+Changes made by Flowgate:
+- Removed /etc/nginx/sites-enabled/default (conflicts with flowgate HTTP server)
+- Added stream block to nginx.conf for Layer 4 proxying
+- Created /etc/nginx/streams-enabled/ for DNS/DoT proxying
+- Created /etc/nginx/sites-enabled/local-services.conf for HTTP/HTTPS
+
+To restore default site:
+  ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+
+Flowgate docs: https://github.com/crim50n/flowgate
+""")
+        except PermissionError:
+            Console.warn("Cannot disable default site - run as root")
+
     return True
 
 def ensure_angie_config() -> bool:
@@ -1602,6 +1629,15 @@ def sync_nginx(config: Dict[str, Any]):
     if not ensure_nginx_config():
         return
 
+    # Disable default site to avoid conflicts (must be done before reload)
+    default_site = Path("/etc/nginx/sites-enabled/default")
+    if default_site.exists() or default_site.is_symlink():
+        try:
+            default_site.unlink()
+            Console.info("Removed default nginx site symlink")
+        except PermissionError:
+            Console.warn("Cannot disable default site - run as root")
+
     try:
         # 1. Stream Config (Layer 4)
         stream_conf = "resolver 1.1.1.1 8.8.8.8;\n\n"
@@ -1630,10 +1666,11 @@ def sync_nginx(config: Dict[str, Any]):
         # Ensure ACME challenge handling is active before issuing certs
         acme_conf = """
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name _;
     location ^~ /.well-known/acme-challenge/ {
-        proxy_pass http://127.0.0.1:9180;
+        proxy_pass http://localhost:9180;
     }
     location / {
         return 301 https://$host$request_uri;
@@ -1938,7 +1975,8 @@ def cmd_doctor(args):
             missing.append('nginx')
         if not results['binaries']['blocky']['installed'] and not results['binaries']['AdGuardHome']['installed']:
             missing.append('blocky')
-        if not results['binaries']['certbot']['installed']:
+        # Certbot only needed for nginx, angie has built-in ACME
+        if not results['binaries']['certbot']['installed'] and results['binaries']['nginx']['installed']:
             missing.append('certbot')
         if not results['binaries']['openssl']['installed']:
             missing.append('openssl')
@@ -2015,15 +2053,22 @@ def cmd_init(args):
     if not CONFIG_FILE.exists():
         load_config()  # This creates initial config
 
-    # 5. Show next steps
+    # 5. Apply initial configuration
+    Console.info("Applying initial configuration...")
+    cmd_sync(args)
+
+    # 6. Show next steps
     Console.header("Initialization Complete")
     print(f"""
 Next steps:
-  1. Add domains:      flowgate add example.com another.com
-  2. Add services:     flowgate service myapp.local 8080
-  3. Set DNS domain:   flowgate dns doh.example.com
-  4. Check status:     flowgate status
-  5. Run diagnostics:  flowgate doctor
+  1. flowgate dns doh.example.com    - Set DNS-over-HTTPS/TLS endpoint
+  2. flowgate status                 - Check running services
+  3. flowgate add example.com        - Add domain for HTTPS proxy
+  4. flowgate service app.local 8080 - Proxy to local backend service
+  5. flowgate doctor                 - Diagnose issues
+
+Note: add/service/dns commands auto-apply configuration.
+      Use 'flowgate sync' after manual YAML edits.
 """)
 
 def cmd_status(args):
