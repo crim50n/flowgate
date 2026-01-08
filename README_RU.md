@@ -30,7 +30,10 @@ Flowgate поддерживает несколько комбинаций бэк
 
 ### Вариант 1: Debian/Ubuntu (рекомендуется)
 
-Скачайте пакеты из [Releases](https://github.com/crim50n/flowgate/releases):
+Скачайте пакеты:
+*   **Flowgate**: [Releases](https://github.com/crim50n/flowgate/releases)
+*   **Blocky**: [crim50n/blocky-deb Releases](https://github.com/crim50n/blocky-deb/releases)
+*   **AdGuardHome**: [crim50n/adguardhome-deb Releases](https://github.com/crim50n/adguardhome-deb/releases)
 
 **Angie + Blocky (по умолчанию):**
 ```bash

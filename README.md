@@ -30,7 +30,10 @@ Flowgate supports multiple backend combinations. Choose based on your needs:
 
 ### Option 1: Debian/Ubuntu (recommended)
 
-Download packages from [Releases](https://github.com/crim50n/flowgate/releases):
+Download packages:
+*   **Flowgate**: [Releases](https://github.com/crim50n/flowgate/releases)
+*   **Blocky**: [crim50n/blocky-deb Releases](https://github.com/crim50n/blocky-deb/releases)
+*   **AdGuardHome**: [crim50n/adguardhome-deb Releases](https://github.com/crim50n/adguardhome-deb/releases)
 
 **Angie + Blocky (default):**
 ```bash
