@@ -35,14 +35,14 @@ Download packages from [Releases](https://github.com/crim50n/flowgate/releases):
 **Angie + Blocky (default):**
 ```bash
 # Add Angie repository first (see https://angie.software/en/install/)
-sudo apt install ./flowgate_*.deb ./blocky_*.deb angie angie-module-stream
+sudo apt install ./flowgate_*.deb ./blocky_*.deb angie
 sudo flowgate init
 ```
 
 **Angie + AdGuardHome:**
 ```bash
 # Add Angie repository first (see https://angie.software/en/install/)
-sudo apt install ./flowgate_*.deb ./adguardhome_*.deb angie angie-module-stream
+sudo apt install ./flowgate_*.deb ./adguardhome_*.deb angie
 sudo flowgate init
 ```
 
@@ -82,13 +82,13 @@ apk add python3 py3-yaml
 ```bash
 # See https://angie.software/en/install/ for repository setup
 # Debian/Ubuntu
-sudo apt install -y angie angie-module-stream
+sudo apt install -y angie
 
 # Fedora/RHEL
-sudo dnf install -y angie angie-mod-stream
+sudo dnf install -y angie
 
 # Alpine Linux
-apk add angie angie-mod-stream
+apk add angie
 ```
 
 *Nginx:*

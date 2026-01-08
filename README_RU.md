@@ -82,13 +82,13 @@ apk add python3 py3-yaml
 ```bash
 # Настройка репозитория: https://angie.software/ru/install/
 # Debian/Ubuntu
-sudo apt install -y angie angie-module-stream
+sudo apt install -y angie
 
 # Fedora/RHEL
-sudo dnf install -y angie angie-mod-stream
+sudo dnf install -y angie
 
 # Alpine Linux
-apk add angie angie-mod-stream
+apk add angie
 ```
 
 *Nginx:*

@@ -1,3 +1,13 @@
+flowgate (1.1.1-1) unstable; urgency=medium
+
+  * Fix Angie stream block auto-enablement during init.
+  * Auto-uncomment stream block in default Angie config.
+  * Remove default example.conf from /etc/angie/stream.d/.
+  * Update README: remove non-existent angie-module-stream package.
+  * Stream module is built-in to Angie, no separate package needed.
+
+ -- crims0n <crims0n@minios.dev>  Wed, 08 Jan 2026 18:15:00 +0300
+
 flowgate (1.1.0-1) unstable; urgency=medium
 
   * Expand OS detection to support 30+ Linux distributions.

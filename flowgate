@@ -726,6 +726,63 @@ Flowgate docs: https://github.com/crim50n/flowgate
 
     return True
 
+def _ensure_stream_block_enabled(conf_path: Path) -> bool:
+    """Ensure stream block is uncommented in Angie/Nginx config.
+    
+    Default Angie installations have stream block commented out.
+    This function uncomments it to enable Layer 4 proxying.
+    """
+    try:
+        content = conf_path.read_text()
+        
+        # Check if stream block is commented out
+        if '#stream {' in content or '#stream{' in content:
+            # Uncomment stream block and its include directive
+            new_content = re.sub(
+                r'^#\s*(stream\s*\{)',
+                r'\1',
+                content,
+                flags=re.MULTILINE
+            )
+            new_content = re.sub(
+                r'^#\s*(include\s+/etc/angie/stream\.d/)',
+                r'    \1',
+                new_content,
+                flags=re.MULTILINE
+            )
+            # Also uncomment closing brace if it's on its own commented line after stream
+            new_content = re.sub(
+                r'^#\s*\}(\s*#?\s*stream)?$',
+                r'}',
+                new_content,
+                flags=re.MULTILINE
+            )
+            
+            if new_content != content:
+                conf_path.write_text(new_content)
+                Console.info("Enabled stream block in Angie config")
+                return True
+        
+        # Check if stream block is completely missing
+        elif 'stream {' not in content and 'stream{' not in content:
+            stream_block = """
+# Stream configuration for Layer 4 proxying (added by Flowgate)
+stream {
+    include /etc/angie/stream.d/*.conf;
+}
+"""
+            with open(conf_path, 'a') as f:
+                f.write(stream_block)
+            Console.success("Added stream block to Angie config")
+            return True
+            
+    except PermissionError:
+        Console.warn(f"Cannot modify {conf_path}. Enable stream block manually.")
+    except Exception as e:
+        Console.warn(f"Failed to enable stream block: {e}")
+    
+    return False
+
 def ensure_angie_config() -> bool:
     """Ensure Angie configuration directories and base files exist."""
     stream_dir = PATHS['angie_stream'].parent
@@ -745,6 +802,17 @@ def ensure_angie_config() -> bool:
     # Fix user directive in existing config
     if angie_conf.exists():
         fix_nginx_user(angie_conf)
+        # Ensure stream block is uncommented
+        _ensure_stream_block_enabled(angie_conf)
+
+    # Remove default example.conf that ships with Angie (causes conflicts)
+    example_conf = stream_dir / "example.conf"
+    if example_conf.exists():
+        try:
+            example_conf.unlink()
+            Console.info("Removed default Angie stream example.conf")
+        except PermissionError:
+            Console.warn("Cannot remove example.conf - run as root")
 
     # Create base angie.conf if missing
     if not angie_conf.exists() and angie_conf.parent.exists():
