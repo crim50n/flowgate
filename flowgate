@@ -728,13 +728,13 @@ Flowgate docs: https://github.com/crim50n/flowgate
 
 def _ensure_stream_block_enabled(conf_path: Path) -> bool:
     """Ensure stream block is uncommented in Angie/Nginx config.
-    
+
     Default Angie installations have stream block commented out.
     This function uncomments it to enable Layer 4 proxying.
     """
     try:
         content = conf_path.read_text()
-        
+
         # Check if stream block is commented out
         if '#stream {' in content or '#stream{' in content:
             # Uncomment stream block and its include directive
@@ -757,12 +757,12 @@ def _ensure_stream_block_enabled(conf_path: Path) -> bool:
                 new_content,
                 flags=re.MULTILINE
             )
-            
+
             if new_content != content:
                 conf_path.write_text(new_content)
                 Console.info("Enabled stream block in Angie config")
                 return True
-        
+
         # Check if stream block is completely missing
         elif 'stream {' not in content and 'stream{' not in content:
             stream_block = """
@@ -775,12 +775,12 @@ stream {
                 f.write(stream_block)
             Console.success("Added stream block to Angie config")
             return True
-            
+
     except PermissionError:
         Console.warn(f"Cannot modify {conf_path}. Enable stream block manually.")
     except Exception as e:
         Console.warn(f"Failed to enable stream block: {e}")
-    
+
     return False
 
 def ensure_angie_config() -> bool:
