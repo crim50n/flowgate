@@ -1,3 +1,11 @@
+flowgate (1.1.2-1) unstable; urgency=medium
+
+  * Smart Sync: Try to start services if they are inactive instead of reloading.
+  * Sync Check: Warn user if services failed to start after sync.
+  * Improve reliability when deploying on fresh servers.
+
+ -- crims0n <crims0n@minios.dev>  Sat, 10 Jan 2026 23:15:03 +0300
+
 flowgate (1.1.1-1) unstable; urgency=medium
 
   * Fix Angie stream block auto-enablement during init.

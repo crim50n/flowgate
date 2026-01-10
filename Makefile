@@ -64,6 +64,11 @@ install-flowgate:
 	# Install default config
 	install -m 644 flowgate.yaml.default $(DESTDIR)$(CONFDIR)/flowgate.yaml.default
 
+	# Copy to active config if not exists (don't overwrite existing config)
+	@test -f $(DESTDIR)$(CONFDIR)/flowgate.yaml || \
+		(install -m 644 flowgate.yaml.default $(DESTDIR)$(CONFDIR)/flowgate.yaml && \
+		echo "Created default configuration at $(CONFDIR)/flowgate.yaml")
+
 	@echo "flowgate installed"
 
 # Install Flowgate Web

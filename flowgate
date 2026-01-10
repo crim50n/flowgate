@@ -1684,8 +1684,13 @@ server {{
         # Test config only if angie binary exists
         if shutil.which('angie'):
             run_cmd(['angie', '-t'])
-        run_cmd(['systemctl', 'reload', 'angie'])
-        Console.success("Angie reloaded with separate ACME certificates per domain")
+        
+        if is_active('angie'):
+            run_cmd(['systemctl', 'reload', 'angie'])
+            Console.success("Angie reloaded with separate ACME certificates per domain")
+        else:
+            run_cmd(['systemctl', 'start', 'angie'])
+            Console.success("Angie started")
 
     except Exception as e:
         Console.error(f"Angie sync failed: {e}")
@@ -1752,7 +1757,10 @@ server {
 
         # Reload nginx only if binary exists
         if shutil.which('nginx'):
-            run_cmd(['systemctl', 'reload', 'nginx'])
+            if is_active('nginx'):
+                run_cmd(['systemctl', 'reload', 'nginx'])
+            else:
+                run_cmd(['systemctl', 'start', 'nginx'])
 
         for domain in service_domains:
             data = config['domains'][domain]
@@ -1829,8 +1837,12 @@ server {{
 
         # Reload nginx only if binary exists
         if shutil.which('nginx'):
-            run_cmd(['systemctl', 'reload', 'nginx'])
-        Console.success("Nginx reloaded")
+            if is_active('nginx'):
+                run_cmd(['systemctl', 'reload', 'nginx'])
+                Console.success("Nginx reloaded")
+            else:
+                run_cmd(['systemctl', 'start', 'nginx'])
+                Console.success("Nginx started")
 
     except Exception as e:
         Console.error(f"Nginx sync failed: {e}")
@@ -1863,6 +1875,17 @@ def cmd_sync(args):
         sync_nginx(config)
     elif proxy == 'angie':
         sync_angie(config)
+
+    # Final check
+    if proxy != 'none' and not is_active(proxy):
+        Console.warn(f"Warning: {proxy} is not running after sync.")
+        Console.info(f"Try running: systemctl start {proxy}")
+    
+    if dns != 'none' and not is_active(dns):
+        # Map dns name to service name
+        svc = 'AdGuardHome' if dns == 'adguard' else dns
+        Console.warn(f"Warning: {dns} is not running after sync.")
+        Console.info(f"Try running: systemctl start {svc}")
 
     Console.header("Sync Completed Successfully")
 
