@@ -1,3 +1,14 @@
+flowgate (1.1.3-1) unstable; urgency=medium
+
+  * Fix DoH/DoT: Use HTTPS proxy_pass for port 8443 services.
+  * Auto-configure http block with resolver and variables_hash_bucket_size.
+  * Security: Add DNS user (blocky/adguardhome) to proxy group for cert access.
+  * Security: Auto-detect proxy group (angie, www-data, nginx).
+  * Security: Set proper permissions (750/640) on certificate files.
+  * Support both Angie (native ACME) and Nginx (certbot) certificate paths.
+
+ -- crims0n <crims0n@minios.dev>  Sun, 11 Jan 2026 20:30:00 +0300
+
 flowgate (1.1.2-1) unstable; urgency=medium
 
   * Smart Sync: Try to start services if they are inactive instead of reloading.

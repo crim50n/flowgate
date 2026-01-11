@@ -14,6 +14,8 @@ import json
 import shutil
 import subprocess
 import argparse
+import grp
+import pwd
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
@@ -608,7 +610,6 @@ def get_nginx_user() -> str:
     - Gentoo: nginx
     - FreeBSD: www
     """
-    import pwd
     # Check which user exists (in order of preference)
     nginx_users = ['nginx', 'www-data', 'http', 'wwwrun', 'www', '_www']
     for user in nginx_users:
@@ -635,7 +636,6 @@ def fix_nginx_user(conf_path: Path) -> bool:
             current_user = match.group(1)
             if current_user != correct_user:
                 # Verify current user doesn't exist but correct_user does
-                import pwd
                 try:
                     pwd.getpwnam(current_user)
                     return False  # Current user exists, no change needed
@@ -783,6 +783,62 @@ stream {
 
     return False
 
+def _ensure_http_block_settings(conf_path: Path) -> bool:
+    """Ensure http block has required settings for ACME and proxying.
+
+    Adds resolver and variables_hash_bucket_size if missing.
+    These are required for ACME challenges and proper variable handling.
+    """
+    try:
+        content = conf_path.read_text()
+        modified = False
+
+        # Check if resolver is missing in http block
+        if 'resolver' not in content or re.search(r'http\s*\{[^}]*resolver', content, re.DOTALL) is None:
+            # Add resolver after 'http {' line
+            new_content = re.sub(
+                r'(http\s*\{)',
+                r'\1\n    resolver 8.8.8.8 1.1.1.1 ipv6=off;',
+                content,
+                count=1
+            )
+            if new_content != content:
+                content = new_content
+                modified = True
+
+        # Check if variables_hash_bucket_size is missing
+        if 'variables_hash_bucket_size' not in content:
+            # Add after resolver or after 'http {'
+            if 'resolver' in content:
+                new_content = re.sub(
+                    r'(resolver\s+[^;]+;)',
+                    r'\1\n    variables_hash_bucket_size 512;',
+                    content,
+                    count=1
+                )
+            else:
+                new_content = re.sub(
+                    r'(http\s*\{)',
+                    r'\1\n    variables_hash_bucket_size 512;',
+                    content,
+                    count=1
+                )
+            if new_content != content:
+                content = new_content
+                modified = True
+
+        if modified:
+            conf_path.write_text(content)
+            Console.info("Added resolver and variables_hash_bucket_size to http block")
+            return True
+
+    except PermissionError:
+        Console.warn(f"Cannot modify {conf_path}. Add http settings manually.")
+    except Exception as e:
+        Console.warn(f"Failed to update http block settings: {e}")
+
+    return False
+
 def ensure_angie_config() -> bool:
     """Ensure Angie configuration directories and base files exist."""
     stream_dir = PATHS['angie_stream'].parent
@@ -804,6 +860,8 @@ def ensure_angie_config() -> bool:
         fix_nginx_user(angie_conf)
         # Ensure stream block is uncommented
         _ensure_stream_block_enabled(angie_conf)
+        # Ensure http block has required settings for ACME
+        _ensure_http_block_settings(angie_conf)
 
     # Remove default example.conf that ships with Angie (causes conflicts)
     example_conf = stream_dir / "example.conf"
@@ -831,6 +889,9 @@ stream {{
 }}
 
 http {{
+    resolver 8.8.8.8 1.1.1.1 ipv6=off;
+    variables_hash_bucket_size 512;
+
     sendfile on;
     tcp_nopush on;
     tcp_nodelay on;
@@ -1552,7 +1613,7 @@ def sync_angie(config: Dict[str, Any]):
 
     try:
         # 1. Stream Config (Layer 4)
-        stream_conf = "resolver 1.1.1.1 8.8.8.8;\n\n"
+        stream_conf = "resolver 1.1.1.1 8.8.8.8 ipv6=off;\n\n"
         stream_conf += "map $ssl_preread_server_name $backend_name {\n    hostnames;\n"
 
         proxy_domains = [d for d, v in config['domains'].items() if v.get('type') == 'proxy']
@@ -1668,7 +1729,7 @@ server {{
 
     # Proxy to backend
     location / {{
-        proxy_pass http://{ip}:{port};
+        proxy_pass {'https' if port == 8443 else 'http'}://{ip}:{port};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -1681,10 +1742,50 @@ server {{
         with open(PATHS['angie_http'], 'w') as f:
             f.write(http_conf)
 
+        # Fix permissions for ACME certificates (needed for DNS server to read)
+        acme_dir = Path("/var/lib/angie/acme")
+        if acme_dir.exists():
+            try:
+                # Check if angie group exists
+                angie_group_exists = False
+                try:
+                    grp.getgrnam('angie')
+                    angie_group_exists = True
+                except KeyError:
+                    pass
+
+                # Check for DNS server users (blocky or adguardhome) and add to angie group
+                dns_users = ['blocky', 'adguardhome']
+                for dns_user in dns_users:
+                    try:
+                        pwd.getpwnam(dns_user)
+                        if angie_group_exists:
+                            run_cmd(['usermod', '-a', '-G', 'angie', dns_user], check=False)
+                    except KeyError:
+                        pass
+
+                # Set group ownership and permissions
+                for cert_dir in acme_dir.glob("acme_*"):
+                    if cert_dir.is_dir():
+                        # Set group to angie and make directory group-readable
+                        if angie_group_exists:
+                            run_cmd(['chgrp', '-R', 'angie', str(cert_dir)], check=False)
+                        run_cmd(['chmod', '750', str(cert_dir)], check=False)
+
+                        cert_file = cert_dir / "certificate.pem"
+                        key_file = cert_dir / "private.key"
+
+                        if cert_file.exists():
+                            run_cmd(['chmod', '640', str(cert_file)], check=False)
+                        if key_file.exists():
+                            run_cmd(['chmod', '640', str(key_file)], check=False)
+            except Exception as e:
+                Console.warn(f"Could not fix certificate permissions: {e}")
+
         # Test config only if angie binary exists
         if shutil.which('angie'):
             run_cmd(['angie', '-t'])
-        
+
         if is_active('angie'):
             run_cmd(['systemctl', 'reload', 'angie'])
             Console.success("Angie reloaded with separate ACME certificates per domain")
@@ -1713,7 +1814,7 @@ def sync_nginx(config: Dict[str, Any]):
 
     try:
         # 1. Stream Config (Layer 4)
-        stream_conf = "resolver 1.1.1.1 8.8.8.8;\n\n"
+        stream_conf = "resolver 1.1.1.1 8.8.8.8 ipv6=off;\n\n"
         stream_conf += "map $ssl_preread_server_name $backend_name {\n    hostnames;\n"
 
         proxy_domains = [d for d, v in config['domains'].items() if v.get('type') == 'proxy']
@@ -1835,6 +1936,46 @@ server {{
         with open(PATHS['nginx_http'], 'w') as f:
             f.write(http_conf + acme_conf)
 
+        # Fix permissions for certbot certificates (needed for DNS server to read)
+        letsencrypt_dir = Path("/etc/letsencrypt")
+        if letsencrypt_dir.exists():
+            try:
+                # Determine which group to use (www-data on Debian/Ubuntu, nginx on RHEL/Alpine)
+                cert_group = None
+                for group_name in ['www-data', 'nginx']:
+                    try:
+                        grp.getgrnam(group_name)
+                        cert_group = group_name
+                        break
+                    except KeyError:
+                        pass
+
+                if cert_group:
+                    # Add DNS server users to nginx group for certificate access
+                    dns_users = ['blocky', 'adguardhome']
+                    for dns_user in dns_users:
+                        try:
+                            pwd.getpwnam(dns_user)
+                            run_cmd(['usermod', '-a', '-G', cert_group, dns_user], check=False)
+                        except KeyError:
+                            pass
+
+                    # Set group permissions on live and archive directories
+                    for subdir in ['live', 'archive']:
+                        cert_subdir = letsencrypt_dir / subdir
+                        if cert_subdir.exists():
+                            run_cmd(['chgrp', '-R', cert_group, str(cert_subdir)], check=False)
+                            run_cmd(['chmod', '750', str(cert_subdir)], check=False)
+                            # Set permissions on certificate files
+                            for cert_dir in cert_subdir.iterdir():
+                                if cert_dir.is_dir():
+                                    run_cmd(['chmod', '750', str(cert_dir)], check=False)
+                                    for f in cert_dir.iterdir():
+                                        if f.is_file():
+                                            run_cmd(['chmod', '640', str(f)], check=False)
+            except Exception as e:
+                Console.warn(f"Could not fix certificate permissions: {e}")
+
         # Reload nginx only if binary exists
         if shutil.which('nginx'):
             if is_active('nginx'):
@@ -1880,7 +2021,7 @@ def cmd_sync(args):
     if proxy != 'none' and not is_active(proxy):
         Console.warn(f"Warning: {proxy} is not running after sync.")
         Console.info(f"Try running: systemctl start {proxy}")
-    
+
     if dns != 'none' and not is_active(dns):
         # Map dns name to service name
         svc = 'AdGuardHome' if dns == 'adguard' else dns
