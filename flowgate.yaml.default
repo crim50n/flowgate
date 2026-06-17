@@ -2,43 +2,179 @@ settings:
   proxy_ip: "0.0.0.0" # Will be replaced by entrypoint or env var
 domains:
   # AI Services (Passthrough)
+  agentclientprotocol.com: {type: proxy}
+  ai.google.dev: {type: proxy}
+  ai.studio: {type: proxy}
+  aicode.googleapis.com: {type: proxy}
+  aida.googleapis.com: {type: proxy}
+  aisandbox-pa.googleapis.com: {type: proxy}
   aistudio.google.com: {type: proxy}
   aistudiocdn.com: {type: proxy}
+  alkalicore-pa.clients6.google.com: {type: proxy}
   alkalimakersuite-pa.clients6.google.com: {type: proxy}
   anthropic.com: {type: proxy}
+  antigravity-pa.googleapis.com: {type: proxy}
+  antigravity-unleash.goog: {type: proxy}
+  antigravity.google: {type: proxy}
+  antigravity.googleapis.com: {type: proxy}
+  anythingllm.com: {type: proxy}
   api.github.com: {type: proxy}
+  arena.ai: {type: proxy}
   bard.google.com: {type: proxy}
-  character.ai: {type: proxy}
-  chatgpt.com: {type: proxy}
+  cerebras.ai: {type: proxy}
   cdn.openai.com: {type: proxy}
+  character.ai: {type: proxy}
+  chat.com: {type: proxy}
+  chatgpt.com: {type: proxy}
+  chatgpt.livekit.cloud: {type: proxy}
+  chutes.ai: {type: proxy}
+  cici.com: {type: proxy}
+  ciciai.com: {type: proxy}
+  ciciaicdn.com: {type: proxy}
+  clau.de: {type: proxy}
   claude.ai: {type: proxy}
+  claude.com: {type: proxy}
+  claudemcpclient.com: {type: proxy}
+  claudemcpcontent.com: {type: proxy}
+  claudeusercontent.com: {type: proxy}
+  clawhub.ai: {type: proxy}
+  clipdrop.co: {type: proxy}
+  cloudaicompanion.googleapis.com: {type: proxy}
+  cloudcode-pa.googleapis.com: {type: proxy}
   clients6.google.com: {type: proxy}
   cohere.ai: {type: proxy}
+  cohere.com: {type: proxy}
+  codeium.com: {type: proxy}
+  codeiumdata.com: {type: proxy}
+  coderabbit.ai: {type: proxy}
+  coderabbit.gallery.vsassets.io: {type: proxy}
+  comfy.org: {type: proxy}
+  comfyci.org: {type: proxy}
+  comfyregistry.org: {type: proxy}
   copilot-proxy.githubusercontent.com: {type: proxy}
+  copilot-telemetry-service.githubusercontent.com: {type: proxy}
+  copilot-telemetry.githubusercontent.com: {type: proxy}
+  copilot-workspace.githubnext.com: {type: proxy}
   copilot.microsoft.com: {type: proxy}
+  copilotprodattachments.blob.core.windows.net: {type: proxy}
+  coze.com: {type: proxy}
+  crewai.com: {type: proxy}
+  crixet.com: {type: proxy}
+  cursor-cdn.com: {type: proxy}
+  cursor.com: {type: proxy}
+  cursor.sh: {type: proxy}
+  cursorapi.com: {type: proxy}
+  daily-cloudcode-pa.googleapis.com: {type: proxy}
+  deepmind.com: {type: proxy}
+  deepmind.google: {type: proxy}
   deepl.com: {type: proxy}
+  devin.ai: {type: proxy}
+  diabrowser.com: {type: proxy}
+  diabrowser.engineering: {type: proxy}
+  dify.ai: {type: proxy}
+  dns.google: {type: proxy}
+  dola.com: {type: proxy}
+  duck.ai: {type: proxy}
   edgeservices.bing.com: {type: proxy}
+  elevenlabs.com: {type: proxy}
+  elevenlabs.io: {type: proxy}
+  envato-static.com: {type: proxy}
+  envato.com: {type: proxy}
+  envatousercontent.com: {type: proxy}
   fal.ai: {type: proxy}
   fal.media: {type: proxy}
   files.oaiusercontent.com: {type: proxy}
+  gateway.ai.cloudflare.com: {type: proxy}
+  geller-pa.googleapis.com: {type: proxy}
+  gemini.google: {type: proxy}
   gemini.google.com: {type: proxy}
+  gemini.gstatic.com: {type: proxy}
+  generativeai.google: {type: proxy}
   generativelanguage.googleapis.com: {type: proxy}
   github.com: {type: proxy}
   githubcopilot.com: {type: proxy}
   grok.com: {type: proxy}
+  grok.x.com: {type: proxy}
+  groq.com: {type: proxy}
+  h2o.ai: {type: proxy}
+  hf.co: {type: proxy}
+  hf.space: {type: proxy}
+  host.livekit.cloud: {type: proxy}
   huggingface.co: {type: proxy}
+  jasper.ai: {type: proxy}
+  jules.google: {type: proxy}
+  jules.google.com: {type: proxy}
+  kiro.dev: {type: proxy}
+  labs.google: {type: proxy}
+  labs.google.com: {type: proxy}
+  langchain.com: {type: proxy}
+  liveperson.net: {type: proxy}
+  lmstudio.ai: {type: proxy}
+  lovart.ai: {type: proxy}
+  lpsnmedia.net: {type: proxy}
+  makersuite.google.com: {type: proxy}
+  manus.im: {type: proxy}
+  manuscdn.com: {type: proxy}
+  marscode.com: {type: proxy}
   meta.ai: {type: proxy}
   midjourney.com: {type: proxy}
+  minimax.io: {type: proxy}
   mistral.ai: {type: proxy}
+  mozilla.ai: {type: proxy}
   musicgpt.com: {type: proxy}
+  notebooklm-pa.googleapis.com: {type: proxy}
+  notebooklm.google: {type: proxy}
+  notebooklm.google.com: {type: proxy}
+  notebooklm.googleapis.com: {type: proxy}
+  oaistatic.com: {type: proxy}
+  oaistatsig.com: {type: proxy}
+  oaiusercontent.com: {type: proxy}
+  ollama.com: {type: proxy}
+  opal.google: {type: proxy}
+  opal.google.com: {type: proxy}
   openai.com: {type: proxy}
+  openai.com.cdn.cloudflare.net: {type: proxy}
+  openaiapi-site.azureedge.net: {type: proxy}
+  openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net: {type: proxy}
+  openaicom.imgix.net: {type: proxy}
+  openaicomproductionae4b.blob.core.windows.net: {type: proxy}
+  openart.ai: {type: proxy}
+  openclaw.ai: {type: proxy}
+  openrouter.ai: {type: proxy}
+  openspec.dev: {type: proxy}
+  oystermercury.top: {type: proxy}
   perplexity.ai: {type: proxy}
+  perplexity.com: {type: proxy}
   pi.ai: {type: proxy}
+  plannotator.ai: {type: proxy}
   poe.com: {type: proxy}
+  poecdn.net: {type: proxy}
+  ppl-ai-file-upload.s3.amazonaws.com: {type: proxy}
+  pplx-res.cloudinary.com: {type: proxy}
+  pplx.ai: {type: proxy}
+  proactivebackend-pa.googleapis.com: {type: proxy}
+  production-openaicom-storage.azureedge.net: {type: proxy}
+  qoder.com: {type: proxy}
   replicate.com: {type: proxy}
+  robinfrontend-pa.googleapis.com: {type: proxy}
+  servd-anthropic-website.b-cdn.net: {type: proxy}
+  sider.ai: {type: proxy}
+  sora.com: {type: proxy}
+  spicywriter.com: {type: proxy}
   stability.ai: {type: proxy}
   static.microsoft: {type: proxy}
+  stitch.withgoogle.com: {type: proxy}
   sydney.bing.com: {type: proxy}
+  tapnow.ai: {type: proxy}
+  themeforest.net: {type: proxy}
+  trae.ai: {type: proxy}
+  turn.livekit.cloud: {type: proxy}
   udio.com: {type: proxy}
+  webchannel-alkalimakersuite-pa.clients6.google.com: {type: proxy}
+  windsurf.build: {type: proxy}
+  windsurf.com: {type: proxy}
   x.ai: {type: proxy}
   you.com: {type: proxy}
+  youmind.ai: {type: proxy}
+  youmind.com: {type: proxy}
+  youmind.site: {type: proxy}
